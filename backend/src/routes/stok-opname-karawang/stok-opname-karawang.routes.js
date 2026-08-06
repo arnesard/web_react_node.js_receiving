@@ -27,5 +27,9 @@ router.get("/barcode-details", KarawangController.barcodeDetails);
 router.get("/cross-docking/summary", CrossDockingController.summary);
 router.get("/cross-docking/totals", CrossDockingController.totals);
 router.get("/cross-docking/detail-all", CrossDockingController.detailAll);
+router.get(
+  "/cross-docking/detail-all-export",
+  CrossDockingController.detailAllExport,
+);
 
 module.exports = router;

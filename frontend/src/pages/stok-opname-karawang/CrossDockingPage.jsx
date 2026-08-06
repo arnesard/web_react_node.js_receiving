@@ -75,16 +75,86 @@ function collectColumns(rows, sampleSize = 30) {
   return columns;
 }
 
+// Ambil nilai field dari row biarpun casing/gaya penamaan field API-nya
+// beda dari yang kita tebak (rackcode / RACKCODE / rackCode / RackCode),
+// biar kolom "Detail All" yang formatnya udah dipatok gak gampang blank
+// gara-gara mismatch huruf besar-kecil doang.
+function getFieldValue(row, key) {
+  if (!row) return undefined;
+  if (row[key] !== undefined) return row[key];
+  const upper = key.toUpperCase();
+  if (row[upper] !== undefined) return row[upper];
+  const lower = key.toLowerCase();
+  if (row[lower] !== undefined) return row[lower];
+  const camel = key.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+  if (row[camel] !== undefined) return row[camel];
+  const pascal = camel.charAt(0).toUpperCase() + camel.slice(1);
+  if (row[pascal] !== undefined) return row[pascal];
+  return undefined;
+}
+
+// Struktur kolom "Detail All" buat TAMPILAN WEB, dipatok manual (bukan
+// auto dari field API) biar sama persis kayak web Cross Docking aslinya:
+// Rackcode, Barcode, Item, Cur Week, Probcode, Judge, Location, lalu 4
+// kolom Hold (QC/QA/QAA/RND). TANPA Bc Collie — field itu gak ada di
+// respons /stock-cd/detail-all bawaan, dan nyari-in buat semua baris di
+// tabel web bakal lambat (di lapangan datanya bisa ribuan baris). Bc
+// Collie cuma ditarik pas Export CSV (lihat DETAIL_ALL_EXPORT_COLUMNS +
+// handleExportDetailAllCsv), bukan buat tampilan langsung.
+const DETAIL_ALL_COLUMNS = [
+  { key: "rackcode", label: "Rackcode" },
+  { key: "barcode", label: "Barcode" },
+  { key: "item", label: "Item" },
+  { key: "curweek", label: "Cur Week" },
+  { key: "probcode", label: "Probcode" },
+  { key: "jdge", label: "Judge" },
+  { key: "loccode", label: "Location" },
+  { key: "hold_reason1", label: "Hold QC" },
+  { key: "hold_reason2", label: "Hold QA" },
+  { key: "hold_reason3", label: "Hold QAA" },
+  { key: "hold_reason4", label: "Hold RND" },
+];
+
+// Sama kayak DETAIL_ALL_COLUMNS, tapi khusus buat CSV export: nyelipin
+// kolom Bc Collie (posisinya sama kayak popup Detail per-item di web
+// asli: setelah Judge, sebelum Location).
+const DETAIL_ALL_EXPORT_COLUMNS = [
+  { key: "rackcode", label: "Rackcode" },
+  { key: "barcode", label: "Barcode" },
+  { key: "item", label: "Item" },
+  { key: "curweek", label: "Cur Week" },
+  { key: "probcode", label: "Probcode" },
+  { key: "jdge", label: "Judge" },
+  { key: "bc_collie", label: "Bc Collie" },
+  { key: "loccode", label: "Location" },
+  { key: "hold_reason1", label: "Hold QC" },
+  { key: "hold_reason2", label: "Hold QA" },
+  { key: "hold_reason3", label: "Hold QAA" },
+  { key: "hold_reason4", label: "Hold RND" },
+];
+
 function csvEscape(value) {
   const text = String(value ?? "");
   if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
   return text;
 }
 
-function downloadCsv(rows, filenamePrefix) {
+// `columns` opsional: kalau dikasih (array {key,label}), CSV-nya ikut
+// urutan & label itu (dipake buat Detail All). Kalau enggak, kolomnya
+// auto dari field yang ada di data (dipake buat Ringkasan/Summary).
+function downloadCsv(rows, filenamePrefix, columns) {
   if (!rows || rows.length === 0) return;
-  const columns = collectColumns(rows);
-  const csv = [columns, ...rows.map((r) => columns.map((c) => r[c]))]
+  const cols = columns
+    ? columns.map((c) => c.key)
+    : collectColumns(rows);
+  const headerRow = columns ? columns.map((c) => c.label) : cols;
+  const getValue = columns
+    ? (row, key) => getFieldValue(row, key)
+    : (row, key) => row[key];
+  const csv = [
+    headerRow,
+    ...rows.map((r) => cols.map((c) => getValue(r, c))),
+  ]
     .map((row) => row.map(csvEscape).join(","))
     .join("\r\n");
   const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8;" });
@@ -190,7 +260,14 @@ function DynamicTable({ rows, emptyMessage }) {
 // Modal "Detail All" — nyontek tampilan web sumber: header biru gelap +
 // tombol close, Export CSV di pojok kanan atas, tabel dengan header sticky
 // & scroll internal sendiri (gak ikut scroll halaman penuh).
-function DetailAllModal({ rows, loading, onClose, onExportCsv }) {
+function DetailAllModal({
+  rows,
+  loading,
+  note,
+  exporting,
+  onClose,
+  onExportCsv,
+}) {
   const showTable = rows !== null && rows.length > 0;
   const truncated = showTable && rows.length > MAX_TABLE_RENDER_ROWS;
   const visibleRows = showTable
@@ -198,7 +275,6 @@ function DetailAllModal({ rows, loading, onClose, onExportCsv }) {
       ? rows.slice(0, MAX_TABLE_RENDER_ROWS)
       : rows
     : [];
-  const columns = showTable ? collectColumns(visibleRows) : [];
 
   return (
     <div className="ko-cd-modal-backdrop" onClick={onClose}>
@@ -220,16 +296,34 @@ function DetailAllModal({ rows, loading, onClose, onExportCsv }) {
             <button
               className="ko-btn-secondary ko-btn-download"
               onClick={onExportCsv}
-              disabled={!showTable}
+              disabled={!showTable || exporting}
+              title="CSV yang di-download ikut menyertakan kolom Bc Collie"
             >
-              <Download size={16} /> Export CSV
+              {exporting ? (
+                <Loader2 size={16} className="ko-spin" />
+              ) : (
+                <Download size={16} />
+              )}
+              {exporting ? "Menyiapkan CSV..." : "Export CSV"}
             </button>
           </div>
+
+          {exporting && (
+            <div className="ko-cd-truncate-notice">
+              Lagi narik data Bc Collie buat semua baris — bisa makan waktu
+              beberapa menit kalau kombinasi rack/item-nya banyak. Jangan
+              tutup halaman ini dulu.
+            </div>
+          )}
 
           {loading && (
             <div className="ko-empty">
               <Loader2 size={20} className="ko-spin" /> Memuat data detail...
             </div>
+          )}
+
+          {!loading && note && (
+            <div className="ko-cd-truncate-notice">{note}</div>
           )}
 
           {!loading && truncated && (
@@ -249,24 +343,27 @@ function DetailAllModal({ rows, loading, onClose, onExportCsv }) {
               <table className="ko-data-table">
                 <thead>
                   <tr>
-                    {columns.map((col) => (
-                      <th key={col}>{humanizeKey(col)}</th>
+                    {DETAIL_ALL_COLUMNS.map((col) => (
+                      <th key={col.key}>{col.label}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {visibleRows.map((row, idx) => (
                     <tr key={idx}>
-                      {columns.map((col) => (
-                        <td
-                          key={col}
-                          className={
-                            typeof row[col] === "number" ? "ko-mono" : undefined
-                          }
-                        >
-                          {formatCellValue(row[col])}
-                        </td>
-                      ))}
+                      {DETAIL_ALL_COLUMNS.map((col) => {
+                        const value = getFieldValue(row, col.key);
+                        return (
+                          <td
+                            key={col.key}
+                            className={
+                              typeof value === "number" ? "ko-mono" : undefined
+                            }
+                          >
+                            {formatCellValue(value)}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
@@ -322,7 +419,9 @@ export default function CrossDockingPage() {
 
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailRows, setDetailRows] = useState(null); // null = belum pernah diminta
+  const [detailNote, setDetailNote] = useState(""); // info non-fatal, mis. Bc Collie dilewati
   const [showDetailModal, setShowDetailModal] = useState(false);
+  const [exportingCsv, setExportingCsv] = useState(false);
 
   const setFilterField = (key) => (e) =>
     setFilters((prev) => ({ ...prev, [key]: e.target.value }));
@@ -384,6 +483,7 @@ export default function CrossDockingPage() {
       return;
     }
     setError("");
+    setDetailNote("");
     setShowDetailModal(true); // buka modal duluan, isinya nyusul (loading state)
     setDetailLoading(true);
     try {
@@ -401,6 +501,48 @@ export default function CrossDockingPage() {
       );
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  // Export CSV Detail All: fetch ULANG dari endpoint export khusus (bukan
+  // pake detailRows yang lagi tampil di tabel), soalnya di endpoint ini
+  // bc_collie di-enrich buat SEMUA baris tanpa batas jumlah kombinasi —
+  // bisa makan waktu lumayan lama kalau datanya ribuan baris, makanya
+  // dipisah dari tampilan tabel biar tabelnya sendiri tetep cepat.
+  const handleExportDetailAllCsv = async () => {
+    if (!detailChecked && !hasAnyFilter) {
+      setError(
+        'Minimal isi satu filter (Item / Rackcode / Barcode / Week), atau centang "Detail" dulu sebelum export.',
+      );
+      return;
+    }
+    setError("");
+    setExportingCsv(true);
+    try {
+      const res = await api.get(
+        "/stok-opname-karawang/cross-docking/detail-all-export",
+        {
+          params: queryParams(),
+          timeout: 5 * 60 * 1000, // 5 menit — bisa lama kalau kombinasi rack+item banyak
+        },
+      );
+      const exportRows = res.data?.data || [];
+      const meta = res.data?.meta;
+      downloadCsv(
+        exportRows,
+        "cross-docking-detail-all",
+        DETAIL_ALL_EXPORT_COLUMNS,
+      );
+      if (meta && meta.bcCollieEnriched === false && meta.bcCollieSkippedReason) {
+        setDetailNote(meta.bcCollieSkippedReason);
+      }
+    } catch (err) {
+      setError(
+        err.response?.data?.message ||
+          "Gagal menyiapkan file CSV (termasuk Bc Collie). Coba lagi, atau persempit filter kalau datanya kebanyakan.",
+      );
+    } finally {
+      setExportingCsv(false);
     }
   };
 
@@ -602,10 +744,10 @@ export default function CrossDockingPage() {
         <DetailAllModal
           rows={detailRows}
           loading={detailLoading}
+          note={detailNote}
+          exporting={exportingCsv}
           onClose={() => setShowDetailModal(false)}
-          onExportCsv={() =>
-            downloadCsv(detailRows, "cross-docking-detail-all")
-          }
+          onExportCsv={handleExportDetailAllCsv}
         />
       )}
     </div>

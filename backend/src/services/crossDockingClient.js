@@ -131,6 +131,13 @@ class CrossDockingClient {
   static async fetchDetailAll(filters) {
     return request("/stock-cd/detail-all", buildFilterParams(filters));
   }
+
+  // Detail per SATU pasangan rackcode+item (endpoint yang sama yang dipake
+  // popup "Detail: RACKCODE / ITEM" di web aslinya). Dipake buat "ngisi"
+  // field bc_collie yang gak ikut kebalikin di /stock-cd/detail-all.
+  static async fetchDetail(rackcode, item) {
+    return request("/stock-cd/detail", { rackcode, item });
+  }
 }
 
 module.exports = CrossDockingClient;

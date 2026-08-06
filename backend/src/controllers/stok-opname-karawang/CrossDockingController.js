@@ -38,6 +38,113 @@ function hasAnyFilter(filters) {
   );
 }
 
+// Ambil field dari row API luar biarpun gak yakin persis casing-nya
+// (rackcode / RACKCODE / rackCode).
+function getField(row, key) {
+  if (!row) return undefined;
+  if (row[key] !== undefined) return row[key];
+  const upper = key.toUpperCase();
+  if (row[upper] !== undefined) return row[upper];
+  const lower = key.toLowerCase();
+  if (row[lower] !== undefined) return row[lower];
+  return undefined;
+}
+
+// Jalanin `mapper` ke tiap item di `items`, maksimal `limit` request
+// bersamaan — biar gak nembak puluhan/ratusan request ke server Cross
+// Docking sekaligus dan bikin dia keteteran/nge-rate-limit kita.
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const current = nextIndex++;
+      results[current] = await mapper(items[current], current);
+    }
+  }
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
+  return results;
+}
+
+// Detail All resmi (/stock-cd/detail-all) gak mengandung field bc_collie —
+// field itu cuma ada di endpoint detail per rackcode+item (/stock-cd/detail,
+// yang di web aslinya dibuka lewat popup "Detail: RACKCODE / ITEM"). Fungsi
+// ini "nempelin" bc_collie ke tiap baris Detail All dengan cara: (1)
+// kumpulin semua pasangan rackcode+item yang unik, (2) query detail buat
+// tiap pasangan itu (dibatasi concurrency biar gak nembak semua sekaligus
+// ke server sumber), (3) cocokin balik ke tiap baris lewat barcode.
+//
+// `maxPairs`: batas jumlah kombinasi rackcode+item sebelum nyerah (biar
+// gak overload server sumber) — null/Infinity = gak ada batas. Dipake beda
+// antara tampilan web (dibatasi, harus cepat) dan export CSV (gak
+// dibatasi, karena user emang udah sengaja nunggu & butuh datanya lengkap).
+async function enrichWithBcCollie(rows, { maxPairs = 150, concurrency = 8 } = {}) {
+  const pairs = new Map(); // "rackcode||item" -> { rackcode, item }
+  rows.forEach((row) => {
+    const rackcode = getField(row, "rackcode");
+    const item = getField(row, "item");
+    if (rackcode && item) {
+      pairs.set(`${rackcode}||${item}`, { rackcode, item });
+    }
+  });
+  const uniquePairs = Array.from(pairs.values());
+
+  if (uniquePairs.length === 0) {
+    return { rows, bcCollieEnriched: true, bcCollieSkippedReason: undefined };
+  }
+
+  if (maxPairs != null && Number.isFinite(maxPairs) && uniquePairs.length > maxPairs) {
+    return {
+      rows,
+      bcCollieEnriched: false,
+      bcCollieSkippedReason: `Ada ${uniquePairs.length} kombinasi rackcode+item pada hasil ini (batas ${maxPairs}), jadi Bc Collie dilewati biar gak membebani server Cross Docking. Persempit filter (mis. isi Rackcode/Item lebih spesifik) untuk melihat Bc Collie.`,
+    };
+  }
+
+  const barcodeToBcCollie = new Map();
+  let anyPairFailed = false;
+
+  await mapWithConcurrency(uniquePairs, concurrency, async (pair) => {
+    try {
+      const detailRows = await CrossDockingClient.fetchDetail(
+        pair.rackcode,
+        pair.item,
+      );
+      (detailRows || []).forEach((detailRow) => {
+        const barcode = getField(detailRow, "barcode");
+        const bcCollie = getField(detailRow, "bc_collie");
+        if (barcode !== undefined) {
+          barcodeToBcCollie.set(barcode, bcCollie);
+        }
+      });
+    } catch (err) {
+      anyPairFailed = true;
+      console.error(
+        `Gagal ambil detail Bc Collie untuk ${pair.rackcode}/${pair.item}:`,
+        err,
+      );
+    }
+  });
+
+  const enrichedRows = rows.map((row) => {
+    const barcode = getField(row, "barcode");
+    const bcCollie =
+      barcode !== undefined && barcodeToBcCollie.has(barcode)
+        ? barcodeToBcCollie.get(barcode)
+        : undefined;
+    return { ...row, bc_collie: bcCollie };
+  });
+
+  return {
+    rows: enrichedRows,
+    bcCollieEnriched: !anyPairFailed,
+    bcCollieSkippedReason: anyPairFailed
+      ? "Sebagian data Bc Collie gagal diambil (koneksi ke server Cross Docking sempat gagal untuk sebagian rack/item). Baris yang gagal akan tampil \"-\" di kolom Bc Collie."
+      : undefined,
+  };
+}
+
 class CrossDockingController {
   static async summary(req, res) {
     try {
@@ -78,6 +185,9 @@ class CrossDockingController {
     }
   }
 
+  // Buat ditampilin di tabel web — CEPAT, TANPA enrichment bc_collie
+  // (soalnya di lapangan hasilnya bisa ribuan kombinasi rackcode+item,
+  // kelamaan kalau nunggu enrichment sebelum tabelnya nongol).
   static async detailAll(req, res) {
     try {
       const filters = filtersFromQuery(req.query);
@@ -96,6 +206,40 @@ class CrossDockingController {
       console.error("CrossDockingController.detailAll gagal:", err);
       res.status(502).json({
         message: err.message || "Gagal mengambil data detail all Cross Docking",
+      });
+    }
+  }
+
+  // Khusus buat Export CSV — sama query-nya kayak detailAll, TAPI di sini
+  // bc_collie di-enrich buat SEMUA baris (gak ada batas jumlah kombinasi),
+  // karena ini aksi yang user sengaja tunggu & butuh data lengkap buat
+  // dibawa ke Excel/CSV, bukan buat tampilan langsung di tabel web.
+  static async detailAllExport(req, res) {
+    try {
+      const filters = filtersFromQuery(req.query);
+      if (!filters.detail && !hasAnyFilter(filters)) {
+        return res.status(400).json({
+          message:
+            'Minimal isi satu filter (Item / Rackcode / Barcode / Week), atau centang "Detail" dulu sebelum mengambil data.',
+        });
+      }
+      const data = await CrossDockingClient.fetchDetailAll(filters);
+      const enriched = await enrichWithBcCollie(data || [], {
+        maxPairs: null, // gak dibatasi buat export
+        concurrency: 10,
+      });
+      res.json({
+        data: enriched.rows,
+        meta: {
+          bcCollieEnriched: enriched.bcCollieEnriched,
+          bcCollieSkippedReason: enriched.bcCollieSkippedReason,
+        },
+      });
+    } catch (err) {
+      console.error("CrossDockingController.detailAllExport gagal:", err);
+      res.status(502).json({
+        message:
+          err.message || "Gagal menyiapkan data export Detail All Cross Docking",
       });
     }
   }
