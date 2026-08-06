@@ -171,4 +171,38 @@ export const karawangStyles = `
     .ko-page-status { order: -1; width: 100%; }
     .ko-page-btn { flex: 1; }
   }
+
+  .ko-cd-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0 12px; }
+  .ko-cd-field .ko-text-input { margin-bottom: 4px; }
+
+  .ko-cd-options-row { display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; margin-top: 8px; padding-top: 12px; border-top: 1px solid #f1f5f9; }
+  .ko-radio-group { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .ko-radio-option { display: flex; align-items: center; gap: 6px; font-size: 12.5px;
+    font-weight: 700; color: #334155; cursor: pointer; user-select: none; }
+  .ko-radio-option input { accent-color: #0021b3; cursor: pointer; }
+  .ko-cd-refresh-btn { width: auto; margin-top: 0; padding: 10px 20px; }
+
+  .ko-cd-error { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c;
+    font-size: 12.5px; font-weight: 700; padding: 12px 14px; border-radius: 12px; margin-bottom: 14px; }
+
+  .ko-cd-stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+    margin-bottom: 14px; }
+  .ko-cd-stat-card { border-radius: 14px; padding: 14px; color: #fff; }
+  .ko-cd-stat-label { display: block; font-size: 10px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.04em; opacity: 0.85; }
+  .ko-cd-stat-value { display: block; font-size: 20px; font-weight: 800; margin-top: 4px; }
+  .ko-cd-stat-blue { background: linear-gradient(135deg, #0021b3, #3b5bfd); }
+  .ko-cd-stat-amber { background: linear-gradient(135deg, #b45309, #f59e0b); }
+  .ko-cd-stat-orange { background: linear-gradient(135deg, #c2410c, #f97316); }
+  .ko-cd-stat-red { background: linear-gradient(135deg, #b91c1c, #ef4444); }
+
+  .ko-cd-detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+  @media (max-width: 640px) {
+    .ko-cd-stats-grid { grid-template-columns: repeat(2, 1fr); }
+    .ko-cd-options-row { flex-direction: column; align-items: stretch; }
+    .ko-cd-refresh-btn { width: 100%; }
+  }
 `;

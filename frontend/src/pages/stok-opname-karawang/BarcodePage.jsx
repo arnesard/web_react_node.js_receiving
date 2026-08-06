@@ -24,14 +24,7 @@ import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
 import { karawangStyles } from "./karawangStyles";
 
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend,
-);
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
 const PAGE_SIZE = 50;
 
@@ -136,7 +129,9 @@ export default function KarawangBarcodePage() {
     const knownKeys = [...counts.keys()]
       .filter((k) => k !== "-")
       .sort((a, b) => a.localeCompare(b));
-    const orderedKeys = counts.has("-") ? [...knownKeys, "-"] : knownKeys;
+    const orderedKeys = counts.has("-")
+      ? [...knownKeys, "-"]
+      : knownKeys;
 
     return {
       labels: orderedKeys.map((k) =>
@@ -242,6 +237,7 @@ export default function KarawangBarcodePage() {
               <h2 className="ko-chart-title">Jumlah Barcode per In WH</h2>
               <div className="ko-date-filter">
                 <div className="ko-date-field">
+                  <span className="ko-date-field-label">Dari</span>
                   <input
                     type="date"
                     className="ko-date-input"
@@ -256,6 +252,7 @@ export default function KarawangBarcodePage() {
                 </div>
                 <span className="ko-date-sep">–</span>
                 <div className="ko-date-field">
+                  <span className="ko-date-field-label">Sampai</span>
                   <input
                     type="date"
                     className="ko-date-input"
@@ -285,9 +282,7 @@ export default function KarawangBarcodePage() {
               </div>
             </div>
             {filteredItems.length === 0 ? (
-              <div className="ko-empty">
-                Tidak ada data untuk ditampilkan di grafik.
-              </div>
+              <div className="ko-empty">Tidak ada data untuk ditampilkan di grafik.</div>
             ) : (
               <div className="ko-chart-wrap">
                 <Bar
@@ -331,6 +326,51 @@ export default function KarawangBarcodePage() {
                   placeholder="Cari barcode, item, deskripsi, transfer..."
                 />
               </label>
+              <div className="ko-date-filter">
+                <div className="ko-date-field">
+                  <span className="ko-date-field-label">Dari</span>
+                  <input
+                    type="date"
+                    className="ko-date-input"
+                    value={dateFrom}
+                    max={dateTo || undefined}
+                    onChange={(e) => {
+                      setDateFrom(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    aria-label="Dari tanggal"
+                  />
+                </div>
+                <span className="ko-date-sep">–</span>
+                <div className="ko-date-field">
+                  <span className="ko-date-field-label">Sampai</span>
+                  <input
+                    type="date"
+                    className="ko-date-input"
+                    value={dateTo}
+                    min={dateFrom || undefined}
+                    onChange={(e) => {
+                      setDateTo(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    aria-label="Sampai tanggal"
+                  />
+                </div>
+                {(dateFrom || dateTo) && (
+                  <button
+                    type="button"
+                    className="ko-date-reset"
+                    onClick={() => {
+                      setDateFrom("");
+                      setDateTo("");
+                      setCurrentPage(1);
+                    }}
+                    title="Reset filter tanggal"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
               <button
                 className="ko-btn-secondary ko-btn-download"
                 onClick={handleDownloadCsv}
