@@ -33,8 +33,29 @@ export const karawangStyles = `
   .ko-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px;
     margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
 
-  .ko-chart-title { font-size: 13px; font-weight: 700; color: #334155; margin: 0 0 12px; }
+  .ko-chart-header { display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 10px 16px; margin-bottom: 16px; }
+  .ko-chart-title { font-size: 13px; font-weight: 700; color: #334155; margin: 0; }
   .ko-chart-wrap { height: 260px; }
+
+  .ko-date-filter { display: flex; align-items: flex-end; gap: 8px; flex-wrap: nowrap; }
+  .ko-date-field { display: flex; flex-direction: column; gap: 3px; }
+  .ko-date-field-label { font-size: 10px; font-weight: 700; color: #94a3b8;
+    text-transform: uppercase; letter-spacing: 0.04em; }
+  .ko-date-input { border: 1px solid #cbd5e1; border-radius: 8px; padding: 6px 8px;
+    font-size: 12px; color: #334155; background: #fff; line-height: 1.2; }
+  .ko-date-input:focus { outline: none; border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+  .ko-date-sep { font-size: 12px; color: #94a3b8; font-weight: 600; align-self: center;
+    padding-bottom: 7px; }
+  .ko-date-reset { align-self: flex-end; border: 1px solid #e2e8f0; background: #f8fafc;
+    color: #64748b; font-size: 12px; font-weight: 600; padding: 6px 10px; border-radius: 8px;
+    cursor: pointer; white-space: nowrap; }
+  .ko-date-reset:hover { background: #f1f5f9; color: #334155; }
+
+  @media (max-width: 640px) {
+    .ko-date-filter { flex-wrap: wrap; }
+  }
 
   .ko-scan-label { font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase;
     letter-spacing: 0.04em; margin-bottom: 8px; }
@@ -114,9 +135,9 @@ export const karawangStyles = `
   .ko-dropdown-name { color: #334155; }
   .ko-dropdown-empty { padding: 12px; text-align: center; font-size: 12.5px; color: #94a3b8; }
 
-  .ko-table-toolbar { display: flex; align-items: center; gap: 10px; }
-  .ko-search-wrap { flex: 1; display: flex; align-items: center; gap: 8px; border: 1px solid #cbd5e1;
-    border-radius: 10px; padding: 0 10px; color: #64748b; background: #fff; }
+  .ko-table-toolbar { display: flex; align-items: center; gap: 12px 10px; flex-wrap: wrap; }
+  .ko-search-wrap { flex: 1 1 220px; min-width: 200px; display: flex; align-items: center; gap: 8px;
+    border: 1px solid #cbd5e1; border-radius: 10px; padding: 0 10px; color: #64748b; background: #fff; }
   .ko-search-wrap input { width: 100%; border: none; outline: none; padding: 11px 0;
     font-size: 13.5px; color: #0f172a; min-width: 0; }
   .ko-table-info { font-size: 12px; color: #64748b; font-weight: 700; margin-top: 10px; }
@@ -144,6 +165,7 @@ export const karawangStyles = `
   .ko-page-status { color: #64748b; font-size: 12px; font-weight: 800; text-align: center; }
   @media (max-width: 560px) {
     .ko-table-toolbar { align-items: stretch; flex-direction: column; }
+    .ko-date-filter { flex-wrap: wrap; }
     .ko-btn-download { width: 100%; }
     .ko-pagination { flex-wrap: wrap; }
     .ko-page-status { order: -1; width: 100%; }

@@ -24,7 +24,14 @@ import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
 import { karawangStyles } from "./karawangStyles";
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+);
 
 const PAGE_SIZE = 50;
 
@@ -39,12 +46,25 @@ function formatInWh(inWh) {
   return `${match[1]}/${match[2]}/${match[3]}`;
 }
 
+// "060826" (DDMMYY) -> "2026-08-06" biar bisa dibandingin string-wise sama
+// value dari <input type="date"> (YYYY-MM-DD). Balikin null kalau formatnya
+// gak sesuai, biar gampang dibuang dari filter tanggal.
+function inWhToIso(inWh) {
+  const kode = String(inWh || "").trim();
+  const match = kode.match(/^(\d{2})(\d{2})(\d{2})$/);
+  if (!match) return null;
+  const [, dd, mm, yy] = match;
+  return `20${yy}-${mm}-${dd}`;
+}
+
 export default function KarawangBarcodePage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [noData, setNoData] = useState(false);
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   useEffect(() => {
     api
@@ -66,29 +86,45 @@ export default function KarawangBarcodePage() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Item yang tampil di tabel/CSV/grafik: gabungan filter search (rak,
+  // barcode, item, deskripsi, transfer, in_wh, week) dan rentang tanggal
+  // in_wh (dari-sampai). Kalau dateFrom/dateTo kosong, gak ada pembatasan
+  // tanggal. Item dengan in_wh gak valid ("-") dibuang begitu salah satu
+  // filter tanggal aktif, soalnya gak ada tanggalnya buat dibandingin.
   const filteredItems = useMemo(() => {
     const q = search.trim().toLowerCase();
     const items = data?.items || [];
-    if (!q) return items;
-    return items.filter((it) =>
-      [
-        it.rak,
-        it.barcode,
-        it.item,
-        it.deskripsi,
-        it.transfer,
-        it.in_wh,
-        it.week,
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(q),
-    );
-  }, [data, search]);
+
+    const bySearch = q
+      ? items.filter((it) =>
+          [
+            it.rak,
+            it.barcode,
+            it.item,
+            it.deskripsi,
+            it.transfer,
+            it.in_wh,
+            it.week,
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(q),
+        )
+      : items;
+
+    if (!dateFrom && !dateTo) return bySearch;
+    return bySearch.filter((it) => {
+      const iso = inWhToIso(it.in_wh);
+      if (!iso) return false;
+      if (dateFrom && iso < dateFrom) return false;
+      if (dateTo && iso > dateTo) return false;
+      return true;
+    });
+  }, [data, search, dateFrom, dateTo]);
 
   // Grafik: jumlah barcode (baris = 1 pcs, lihat catatan level pcs di
-  // KarawangController) dikelompokkan per in_wh, sumbernya tabel yang lagi
-  // tampil (ikut kefilter search). Kode "-" (in_wh gak kebaca dari
+  // KarawangController) dikelompokkan per in_wh, sumbernya filteredItems
+  // (ikut filter search + rentang tanggal). Kode "-" (in_wh gak kebaca dari
   // rackcode) dikelompokin terpisah dan ditaruh paling akhir.
   const inWhChartData = useMemo(() => {
     const counts = new Map();
@@ -100,9 +136,7 @@ export default function KarawangBarcodePage() {
     const knownKeys = [...counts.keys()]
       .filter((k) => k !== "-")
       .sort((a, b) => a.localeCompare(b));
-    const orderedKeys = counts.has("-")
-      ? [...knownKeys, "-"]
-      : knownKeys;
+    const orderedKeys = counts.has("-") ? [...knownKeys, "-"] : knownKeys;
 
     return {
       labels: orderedKeys.map((k) =>
@@ -204,9 +238,56 @@ export default function KarawangBarcodePage() {
           </div>
 
           <div className="ko-card">
-            <h2 className="ko-chart-title">Jumlah Barcode per In WH</h2>
+            <div className="ko-chart-header">
+              <h2 className="ko-chart-title">Jumlah Barcode per In WH</h2>
+              <div className="ko-date-filter">
+                <div className="ko-date-field">
+                  <input
+                    type="date"
+                    className="ko-date-input"
+                    value={dateFrom}
+                    max={dateTo || undefined}
+                    onChange={(e) => {
+                      setDateFrom(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    aria-label="Dari tanggal"
+                  />
+                </div>
+                <span className="ko-date-sep">–</span>
+                <div className="ko-date-field">
+                  <input
+                    type="date"
+                    className="ko-date-input"
+                    value={dateTo}
+                    min={dateFrom || undefined}
+                    onChange={(e) => {
+                      setDateTo(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    aria-label="Sampai tanggal"
+                  />
+                </div>
+                {(dateFrom || dateTo) && (
+                  <button
+                    type="button"
+                    className="ko-date-reset"
+                    onClick={() => {
+                      setDateFrom("");
+                      setDateTo("");
+                      setCurrentPage(1);
+                    }}
+                    title="Reset filter tanggal"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            </div>
             {filteredItems.length === 0 ? (
-              <div className="ko-empty">Tidak ada data untuk ditampilkan di grafik.</div>
+              <div className="ko-empty">
+                Tidak ada data untuk ditampilkan di grafik.
+              </div>
             ) : (
               <div className="ko-chart-wrap">
                 <Bar
