@@ -1,0 +1,142 @@
+/* src/sweetalert-legacy-fix.css
+ *
+ * SweetAlert2 (v11) CSS bawaan pakai selector `:where()` buat jaga
+ * specificity-nya tetep rendah. Masalahnya, `:where()` baru didukung
+ * browser mulai Chrome 88 (2021). Browser lawas (Chrome 66 ke bawah,
+ * kayak yang dipake sebagian scanner PDT Android 9) gak ngenalin
+ * selector itu — dan begitu ada 1 selector yang gak dikenali, SELURUH
+ * rule CSS itu dianggap invalid dan di-skip abis. Efeknya, popup
+ * SweetAlert2 jadi keliatan mentah/gak ke-style di device itu.
+ *
+ * File ini cuma override manual pake selector class biasa (compatible
+ * dari browser jadul manapun), jadi tampilannya tetep konsisten rapi
+ * di semua device, gak peduli baru atau jadul.
+ */
+
+.swal2-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1060;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.6);
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.swal2-popup {
+  background: #fff;
+  border-radius: 16px;
+  padding: 28px 24px;
+  width: 100%;
+  max-width: 400px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  font-family: inherit;
+}
+
+.swal2-title {
+  font-size: 19px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0 0 8px;
+  text-align: center;
+}
+
+.swal2-html-container {
+  font-size: 14px;
+  color: #475569;
+  margin: 0 0 16px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.swal2-actions {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  margin-top: 8px;
+  box-sizing: border-box;
+}
+
+.swal2-styled {
+  flex: 1;
+  min-height: 44px;
+  border: none;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 10px 16px;
+  box-sizing: border-box;
+}
+
+.swal2-confirm {
+  background: #0ea5e9;
+  color: #fff;
+}
+
+.swal2-cancel {
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.swal2-deny {
+  background: #dc3545;
+  color: #fff;
+}
+
+/* Ikon bulat (warning/error/success/info/question) */
+.swal2-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 0 16px;
+  border: 3px solid currentColor;
+  font-size: 32px;
+  font-weight: 700;
+  box-sizing: border-box;
+}
+
+.swal2-icon-warning {
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+.swal2-icon-error {
+  border-color: #dc3545;
+  color: #dc3545;
+}
+.swal2-icon-success {
+  border-color: #16a34a;
+  color: #16a34a;
+}
+.swal2-icon-info {
+  border-color: #0ea5e9;
+  color: #0ea5e9;
+}
+.swal2-icon-question {
+  border-color: #64748b;
+  color: #64748b;
+}
+
+.swal2-icon-content {
+  font-size: 32px;
+  line-height: 1;
+}
+
+/* Toast kecil buat notifikasi sukses timer (showConfirmButton:false, timer:1500) */
+.swal2-popup.swal2-toast {
+  max-width: 320px;
+  padding: 14px 18px;
+  flex-direction: row;
+}
