@@ -119,10 +119,10 @@ export default function PilihMenu() {
             </Link>
           ))}
 
-          <button className="pm-logout-btn" onClick={handleLogout}>
+          {/* <button className="pm-logout-btn" onClick={handleLogout}>
             <LogOut size={18} />
             <span>Logout</span>
-          </button>
+          </button> */}
         </div>
       </div>
     </div>

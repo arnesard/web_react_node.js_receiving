@@ -199,10 +199,45 @@ export const karawangStyles = `
   .ko-cd-stat-red { background: linear-gradient(135deg, #b91c1c, #ef4444); }
 
   .ko-cd-detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ko-cd-detail-check { margin-left: -2px; }
+
+  .ko-cd-actions-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-top: 8px; padding-top: 12px; border-top: 1px solid #f1f5f9; }
+  .ko-cd-actions-row .ko-btn-secondary { width: auto; margin-top: 0; padding: 9px 16px; }
+
+  .ko-cd-row-count { font-size: 12.5px; font-weight: 600; color: #64748b; }
+  .ko-cd-truncate-notice { background: #fffbeb; border: 1px solid #fde68a; color: #92400e;
+    font-size: 12px; font-weight: 600; padding: 10px 12px; border-radius: 10px; margin-bottom: 10px; }
+
+  /* Modal Detail All — mirip web sumber: overlay gelap, header biru tua,
+     tabel dengan header sticky & scroll internal sendiri. */
+  .ko-cd-modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55);
+    display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 24px; }
+  .ko-cd-modal { background: #fff; border-radius: 14px; width: min(1000px, 100%);
+    max-height: min(720px, 90vh); display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35); }
+  .ko-cd-modal-header { background: #0021b3; color: #fff; padding: 14px 20px;
+    display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  .ko-cd-modal-header h2 { margin: 0; font-size: 15px; font-weight: 800; }
+  .ko-cd-modal-close { background: transparent; border: none; color: #fff; cursor: pointer;
+    padding: 4px; border-radius: 6px; display: flex; align-items: center; justify-content: center; }
+  .ko-cd-modal-close:hover { background: rgba(255, 255, 255, 0.15); }
+  .ko-cd-modal-body { padding: 16px 20px 20px; overflow: hidden; display: flex;
+    flex-direction: column; min-height: 0; }
+  .ko-cd-modal-toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px;
+    flex-shrink: 0; }
+  .ko-cd-modal-table-scroll { overflow: auto; border: 1px solid #e2e8f0; border-radius: 10px;
+    min-height: 0; }
+  .ko-cd-modal-table-scroll table { width: 100%; }
+  .ko-cd-modal-table-scroll thead th { position: sticky; top: 0; background: #f8fafc;
+    z-index: 1; box-shadow: 0 1px 0 #e2e8f0; }
 
   @media (max-width: 640px) {
     .ko-cd-stats-grid { grid-template-columns: repeat(2, 1fr); }
     .ko-cd-options-row { flex-direction: column; align-items: stretch; }
     .ko-cd-refresh-btn { width: 100%; }
+    .ko-cd-actions-row { flex-direction: column; align-items: stretch; }
+    .ko-cd-modal-backdrop { padding: 0; }
+    .ko-cd-modal { max-height: 100vh; height: 100vh; border-radius: 0; }
   }
 `;

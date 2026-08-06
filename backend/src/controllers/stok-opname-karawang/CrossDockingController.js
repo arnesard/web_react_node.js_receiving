@@ -24,14 +24,32 @@ function filtersFromQuery(query) {
   };
 }
 
+// Minimal isi satu filter (Item / Rackcode / Barcode / Week) sebelum boleh
+// query — biar gak ada yang bisa manggil endpoint ini tanpa filter sama
+// sekali (mis. lewat Postman/curl langsung), soalnya query tanpa filter
+// terlalu berat buat server Cross Docking sumbernya.
+function hasAnyFilter(filters) {
+  return Boolean(
+    filters.item ||
+    filters.rackcode ||
+    filters.barcode ||
+    filters.weekFrom ||
+    filters.weekTo,
+  );
+}
+
 class CrossDockingController {
   static async summary(req, res) {
     try {
+      const filters = filtersFromQuery(req.query);
+      if (!hasAnyFilter(filters)) {
+        return res.status(400).json({
+          message:
+            "Minimal isi satu filter (Item / Rackcode / Barcode / Week) sebelum mengambil data.",
+        });
+      }
       const viewMode = req.query.viewMode === "byItem" ? "byItem" : "byRack";
-      const data = await CrossDockingClient.fetchSummary(
-        viewMode,
-        filtersFromQuery(req.query),
-      );
+      const data = await CrossDockingClient.fetchSummary(viewMode, filters);
       res.json({ data });
     } catch (err) {
       console.error("CrossDockingController.summary gagal:", err);
@@ -43,9 +61,14 @@ class CrossDockingController {
 
   static async totals(req, res) {
     try {
-      const data = await CrossDockingClient.fetchTotals(
-        filtersFromQuery(req.query),
-      );
+      const filters = filtersFromQuery(req.query);
+      if (!hasAnyFilter(filters)) {
+        return res.status(400).json({
+          message:
+            "Minimal isi satu filter (Item / Rackcode / Barcode / Week) sebelum mengambil data.",
+        });
+      }
+      const data = await CrossDockingClient.fetchTotals(filters);
       res.json({ data });
     } catch (err) {
       console.error("CrossDockingController.totals gagal:", err);
@@ -57,15 +80,22 @@ class CrossDockingController {
 
   static async detailAll(req, res) {
     try {
-      const data = await CrossDockingClient.fetchDetailAll(
-        filtersFromQuery(req.query),
-      );
+      const filters = filtersFromQuery(req.query);
+      // Pengecualian: kalau checkbox "Detail" dicentang (filters.detail true),
+      // boleh tarik Detail All tanpa filter lain. Di luar itu tetep wajib
+      // minimal satu filter, biar gak ada query berat tanpa filter sama sekali.
+      if (!filters.detail && !hasAnyFilter(filters)) {
+        return res.status(400).json({
+          message:
+            'Minimal isi satu filter (Item / Rackcode / Barcode / Week), atau centang "Detail" dulu sebelum mengambil data.',
+        });
+      }
+      const data = await CrossDockingClient.fetchDetailAll(filters);
       res.json({ data });
     } catch (err) {
       console.error("CrossDockingController.detailAll gagal:", err);
       res.status(502).json({
-        message:
-          err.message || "Gagal mengambil data detail all Cross Docking",
+        message: err.message || "Gagal mengambil data detail all Cross Docking",
       });
     }
   }
