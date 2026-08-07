@@ -2,12 +2,14 @@
 // Alur (gak ada lagi step upload sama sekali — batch aktif dibikin
 // otomatis di backend): (1) input ID karyawan sekali di awal sesi
 // (kesimpen di sessionStorage, gak perlu diulang tiap ganti lokasi) → (2)
-// ketik/scan lokasi (loccol), langsung lanjut (belum divalidasi di sini,
-// karena gak ada rak-nya buat dicek ke Cross Docking) → (3) scan RAK
-// (Enter), divalidasi LIVE ke Cross Docking — rak-nya ada, DAN lokasi yang
-// diketik di step 2 beneran cocok sama loccode rak ini menurut Cross
-// Docking → (4) scan COLLIE berkali-kali (Enter tiap collie), masing-
-// masing divalidasi ke API Cross Docking sebelum langsung tersimpan.
+// ketik/scan lokasi (loccol), DIVALIDASI LIVE ke Cross Docking lewat
+// endpoint /validasi-lokasi (pakai snapshot cache terakhir, lihat
+// KarawangController.validasiLokasi) — notif sukses/gagal muncul di sini,
+// baru lanjut kalau lolos → (3) scan RAK (Enter), divalidasi LIVE lagi ke
+// Cross Docking — rak-nya ada, DAN lokasi yang diketik di step 2 beneran
+// cocok sama loccode rak ini menurut Cross Docking — notif sukses/gagal
+// juga → (4) scan COLLIE berkali-kali (Enter tiap collie), masing-masing
+// divalidasi ke API Cross Docking sebelum langsung tersimpan.
 // Tombol "Selesai" nutup sesi rak & lokasi ini, balik ke step input lokasi
 // (karyawan tetap).
 import { useState, useEffect, useRef } from "react";
@@ -44,6 +46,7 @@ export default function KarawangScanPage() {
   // Step 2: lokasi
   const [loccol, setLoccol] = useState(null);
   const [loccolInput, setLoccolInput] = useState("");
+  const [validatingLokasi, setValidatingLokasi] = useState(false);
   const loccolInputRef = useRef(null);
 
   // Step 3: rak & collie
@@ -102,16 +105,38 @@ export default function KarawangScanPage() {
     setCurrentRak(null);
   };
 
-  // Lokasi gak lagi divalidasi di step ini — gak ada rak yang bisa dicek
-  // ke Cross Docking sebelum operator scan raknya. Validasi beneran
-  // kejadian di handleScanRak, nyocokin ke field loccode live Cross
-  // Docking punya rak yang discan.
-  const handleValidasiLokasi = (e) => {
+  // Lokasi divalidasi LIVE ke Cross Docking dulu (endpoint /validasi-lokasi,
+  // pakai snapshot cache terakhir yang ditarik lewat tombol "Refresh Data
+  // Cross Docking" di Dashboard) sebelum operator dibolehin lanjut ke step
+  // scan rak — biar salah ketik lokasi ketauan dari awal, bukan pas rak
+  // udah kescan baru ketauan lokasinya gak cocok.
+  const handleValidasiLokasi = async (e) => {
     if (e.key !== "Enter") return;
     const kode = loccolInput.trim();
-    if (!kode) return;
-    setLoccol(kode);
-    setLoccolInput("");
+    if (!kode || validatingLokasi) return;
+    setValidatingLokasi(true);
+    try {
+      await api.post("/stok-opname-karawang/validasi-lokasi", {
+        loccol: kode,
+      });
+      Swal.fire({
+        icon: "success",
+        title: `Lokasi "${kode}" ditemukan di Cross Docking`,
+        timer: 1400,
+        showConfirmButton: false,
+      });
+      setLoccol(kode);
+      setLoccolInput("");
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: err.response?.data?.message || err.message,
+        timer: 2400,
+        showConfirmButton: false,
+      });
+    } finally {
+      setValidatingLokasi(false);
+    }
   };
 
   const handleGantiLokasi = () => {
@@ -131,6 +156,15 @@ export default function KarawangScanPage() {
         loccol,
       });
       setCurrentRak(res.data.data);
+      // Rak ketemu di Cross Docking DAN cocok sama lokasi yang diinput —
+      // dua-duanya udah dicek di backend (KarawangController.scanRak)
+      // sebelum sampe sini.
+      Swal.fire({
+        icon: "success",
+        title: `Rak "${kode}" sesuai lokasi ${loccol}`,
+        timer: 1400,
+        showConfirmButton: false,
+      });
     } catch (err) {
       Swal.fire({
         icon: "error",
@@ -307,10 +341,15 @@ export default function KarawangScanPage() {
                 ref={loccolInputRef}
                 type="text"
                 className="ko-scan-input"
-                placeholder="Scan / ketik kode lokasi lalu Enter..."
+                placeholder={
+                  validatingLokasi
+                    ? "Memvalidasi ke Cross Docking..."
+                    : "Scan / ketik kode lokasi lalu Enter..."
+                }
                 value={loccolInput}
                 onChange={(e) => setLoccolInput(e.target.value)}
                 onKeyDown={handleValidasiLokasi}
+                disabled={validatingLokasi}
                 autoFocus
               />
             </div>

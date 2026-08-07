@@ -109,6 +109,31 @@ class KarawangScanModel {
     }));
   }
 
+  // Breakdown per item PER RAK — dipakai modal detail item di dashboard buat
+  // nampilin rak mana aja yang udah discan buat item ini (beda dari
+  // distinctRackcodes yang gak dipecah per item).
+  static async summaryPerItemPerRak(batchId) {
+    const [rows] = await poolUtama.query(
+      `SELECT item,
+              rackcode,
+              loccol,
+              COUNT(*) as collie_scanned,
+              SUM(qty) as qty_scanned
+       FROM stok_opname_karawang_scan
+       WHERE batch_id = ?
+       GROUP BY item, rackcode, loccol
+       ORDER BY qty_scanned DESC`,
+      [batchId],
+    );
+    return rows.map((r) => ({
+      item: r.item,
+      rackcode: r.rackcode,
+      loccol: r.loccol,
+      collie_scanned: Number(r.collie_scanned),
+      qty_scanned: Number(r.qty_scanned),
+    }));
+  }
+
   // Breakdown per item PER PIC (karyawan yang scan) — join ke tabel
   // employees buat dapetin nama, dipakai dashboard buat nampilin siapa
   // yang ngerjain item apa (KarawangController.dashboard).

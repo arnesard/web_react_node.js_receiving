@@ -146,10 +146,7 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
     try {
       descrMap = await KarawangEdpModel.descriptionsForItems([...itemSet]);
     } catch (err) {
-      console.error(
-        "getBarcodeLiveData: gagal ambil deskripsi dari db pandu:",
-        err,
-      );
+      console.error("getBarcodeLiveData: gagal ambil deskripsi dari db pandu:", err);
     }
 
     // "transfer": rackcode versi DB-PANDU EDP (bukan Cross Docking), dicari
@@ -160,10 +157,7 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
     try {
       edpRackMap = await KarawangEdpModel.rackDetailsByBarcode([...barcodeSet]);
     } catch (err) {
-      console.error(
-        "getBarcodeLiveData: gagal ambil rackcode dari db pandu:",
-        err,
-      );
+      console.error("getBarcodeLiveData: gagal ambil rackcode dari db pandu:", err);
     }
 
     const items = rawRows.map((r) => {
@@ -288,6 +282,10 @@ async function getAllStock({ forceRefresh = false } = {}) {
     // total_barcode unik (kartu ringkasan), gak ikut dibalikin per-item.
     const perItem = new Map();
     let totalBarcodeSet = new Set();
+    // Set semua loccode unik yang ada di data ini — dipakai buat validasi
+    // lokasi di step Scan (KarawangController.validasiLokasi) TANPA perlu
+    // nembak Cross Docking terpisah tiap operator input lokasi.
+    const locationSet = new Set();
     (rows || []).forEach((row) => {
       const item = (getField(row, "item") || "").toString().trim();
       if (!item) return;
@@ -301,6 +299,8 @@ async function getAllStock({ forceRefresh = false } = {}) {
       }
       perItem.get(item).qty += 1;
       if (barcode) totalBarcodeSet.add(barcode);
+      const loc = (getField(row, "loccode") || "").toString().trim();
+      if (loc) locationSet.add(loc.toUpperCase());
     });
 
     const items = [...perItem.keys()];
@@ -324,6 +324,7 @@ async function getAllStock({ forceRefresh = false } = {}) {
       total_item: list.length,
       total_qty: list.reduce((sum, t) => sum + t.qty, 0),
       total_barcode: totalBarcodeSet.size,
+      locations: [...locationSet],
       fetched_at: new Date().toISOString(),
     };
     allStockCache = { data };
@@ -371,6 +372,47 @@ class KarawangController {
   }
 
   // POST /api/stok-opname-karawang/scan-rak
+  // POST /api/stok-opname-karawang/validasi-lokasi
+  // Step BARU sebelum scan rak: cek lokasi (loccol) yang diinput/discan
+  // operator itu beneran ada di Cross Docking, sebelum lanjut ke scan rak.
+  // Gak nembak Cross Docking sendiri (biar gak berat tiap operator input
+  // lokasi) — pakai snapshot cache dari getAllStock (field `locations`),
+  // yang sama dipakai/di-refresh lewat tombol "Refresh Data Cross Docking"
+  // di halaman Dashboard/Cross Docking/Barcode.
+  async validasiLokasi(req, res) {
+    try {
+      const { loccol } = req.body;
+      if (!loccol) {
+        return response.error(res, "loccol wajib diisi", 422);
+      }
+      const kode = String(loccol).trim();
+
+      if (!allStockCache) {
+        return res.status(409).json({
+          status: "error",
+          message:
+            'Data Cross Docking belum pernah ditarik, jadi lokasi belum bisa divalidasi. Buka halaman Dashboard atau Cross Docking dan klik "Refresh Data Cross Docking" dulu.',
+          data: null,
+        });
+      }
+
+      const ada = (allStockCache.data.locations || []).includes(
+        kode.toUpperCase(),
+      );
+      if (!ada) {
+        return response.error(
+          res,
+          `Lokasi "${kode}" tidak ditemukan di Cross Docking (data terakhir ditarik: ${new Date(allStockCache.data.fetched_at).toLocaleString("id-ID")}). Cek lagi kode lokasinya.`,
+          404,
+        );
+      }
+      return response.success(res, { loccol: kode, valid: true });
+    } catch (err) {
+      console.error("KarawangController.validasiLokasi gagal:", err);
+      return response.error(res, err.message);
+    }
+  }
+
   // Klik/scan kode rak dulu → validasi: (a) kebagian di lokasi yang
   // diinput operator pas mulai opname, (b) BENERAN ADA di API Cross
   // Docking (live) — kalau enggak, berarti rak ini gak dikenal Cross
@@ -618,11 +660,12 @@ class KarawangController {
         return response.error(res, "Batch tidak ditemukan", 404);
       }
 
-      const [{ target, total_item, total_qty_target }, scanned, picRows] =
+      const [{ target, total_item, total_qty_target }, scanned, picRows, rakRows] =
         await Promise.all([
           getLiveTarget(batchId),
           KarawangScanModel.summaryPerItem(batchId),
           KarawangScanModel.summaryPerItemPerPic(batchId),
+          KarawangScanModel.summaryPerItemPerRak(batchId),
         ]);
       const scannedMap = new Map(scanned.map((s) => [s.item, s]));
 
@@ -637,6 +680,19 @@ class KarawangController {
           nama: p.nama_karyawan,
           collie_scanned: p.collie_scanned,
           qty_scanned: p.qty_scanned,
+        });
+      });
+
+      // Kelompokin breakdown RAK per item, buat modal detail item nampilin
+      // rak-rak mana aja yang udah discan buat item ini.
+      const rakByItem = new Map();
+      rakRows.forEach((r) => {
+        if (!rakByItem.has(r.item)) rakByItem.set(r.item, []);
+        rakByItem.get(r.item).push({
+          rackcode: r.rackcode,
+          loccol: r.loccol,
+          collie_scanned: r.collie_scanned,
+          qty_scanned: r.qty_scanned,
         });
       });
 
@@ -659,6 +715,8 @@ class KarawangController {
             : 0,
           // Siapa aja yang scan item ini (bisa lebih dari 1 orang).
           pic: picByItem.get(t.item) || [],
+          // Rak mana aja yang udah discan buat item ini.
+          rak: rakByItem.get(t.item) || [],
         };
       });
 
@@ -718,10 +776,7 @@ class KarawangController {
       try {
         allStock = await getAllStock({ forceRefresh: wantRefresh });
       } catch (cdErr) {
-        console.error(
-          "KarawangController.dashboardFull gagal ambil Cross Docking:",
-          cdErr,
-        );
+        console.error("KarawangController.dashboardFull gagal ambil Cross Docking:", cdErr);
         // Kalau refresh gagal TAPI masih ada cache lama, tetep tampilin cache
         // lama (mendingan data agak basi daripada dashboard blank), sambil
         // kasih tau di response kalau refresh barusan gagal.
@@ -737,9 +792,10 @@ class KarawangController {
         }
       }
 
-      const [scanned, picRows, totalScanned] = await Promise.all([
+      const [scanned, picRows, rakRows, totalScanned] = await Promise.all([
         KarawangScanModel.summaryPerItem(batchId),
         KarawangScanModel.summaryPerItemPerPic(batchId),
+        KarawangScanModel.summaryPerItemPerRak(batchId),
         KarawangScanModel.totals(batchId),
       ]);
       const scannedMap = new Map(scanned.map((s) => [s.item, s]));
@@ -753,6 +809,17 @@ class KarawangController {
           nama: p.nama_karyawan,
           collie_scanned: p.collie_scanned,
           qty_scanned: p.qty_scanned,
+        });
+      });
+
+      const rakByItem = new Map();
+      rakRows.forEach((r) => {
+        if (!rakByItem.has(r.item)) rakByItem.set(r.item, []);
+        rakByItem.get(r.item).push({
+          rackcode: r.rackcode,
+          loccol: r.loccol,
+          collie_scanned: r.collie_scanned,
+          qty_scanned: r.qty_scanned,
         });
       });
 
@@ -772,6 +839,7 @@ class KarawangController {
             ? Math.min(100, Math.round((s.qty_scanned / t.qty) * 100))
             : 0,
           pic: picByItem.get(t.item) || [],
+          rak: rakByItem.get(t.item) || [],
         };
       });
 

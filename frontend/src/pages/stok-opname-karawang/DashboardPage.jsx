@@ -21,11 +21,12 @@ import { karawangStyles } from "./karawangStyles";
 // layar penuh item) — sekarang dipindah ke sini, muncul pas card diklik.
 function ItemDetailModal({ item, onClose }) {
   const pic = item.pic || [];
+  const rak = item.rak || [];
   return (
     <div className="ko-cd-modal-backdrop" onClick={onClose}>
       <div
         className="ko-cd-modal"
-        style={{ width: "min(560px, 100%)", maxHeight: "min(560px, 90vh)" }}
+        style={{ width: "min(880px, 96vw)", maxHeight: "min(760px, 90vh)" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="ko-cd-modal-header">
@@ -59,13 +60,45 @@ function ItemDetailModal({ item, onClose }) {
             <strong>{Math.max(0, item.sisa_qty)}</strong>
           </div>
 
+          <div className="ko-modal-section-title">
+            Rak yang sudah discan ({rak.length})
+          </div>
+          {rak.length === 0 ? (
+            <div className="ko-empty" style={{ padding: "1.2rem" }}>
+              Belum ada rak yang discan buat item ini.
+            </div>
+          ) : (
+            <div className="ko-cd-modal-table-scroll" style={{ maxHeight: 220 }}>
+              <table className="ko-data-table">
+                <thead>
+                  <tr>
+                    <th>Rak</th>
+                    <th>Lokasi</th>
+                    <th>Qty Discan</th>
+                    <th>Collie Discan</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rak.map((r, idx) => (
+                    <tr key={`${r.rackcode}-${idx}`}>
+                      <td className="ko-strong">{r.rackcode}</td>
+                      <td>{r.loccol || "-"}</td>
+                      <td className="ko-mono">{r.qty_scanned}</td>
+                      <td className="ko-mono">{r.collie_scanned}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           <div className="ko-modal-section-title">Operator yang scan</div>
           {pic.length === 0 ? (
             <div className="ko-empty" style={{ padding: "1.2rem" }}>
               Belum ada operator yang scan item ini.
             </div>
           ) : (
-            <div className="ko-cd-modal-table-scroll" style={{ maxHeight: 260 }}>
+            <div className="ko-cd-modal-table-scroll" style={{ maxHeight: 220 }}>
               <table className="ko-data-table">
                 <thead>
                   <tr>

@@ -6,6 +6,7 @@ const CrossDockingController = require("../../controllers/stok-opname-karawang/C
 
 router.get("/batches", KarawangController.listBatches);
 router.get("/batches/active", KarawangController.getActiveBatch);
+router.post("/validasi-lokasi", KarawangController.validasiLokasi);
 router.post("/scan-rak", KarawangController.scanRak);
 router.post("/scan-collie", KarawangController.scanCollie);
 router.post("/scan-collie/cancel", KarawangController.cancelScan);
