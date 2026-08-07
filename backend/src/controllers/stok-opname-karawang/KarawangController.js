@@ -52,7 +52,9 @@ function currentUserId(req) {
 function getInWhFromRackcode(rackcode) {
   const kode = String(rackcode || "").trim();
   const firstRackcode = kode.split(",")[0].trim();
-  const match = firstRackcode.match(/^T\s*-\s*2(\d{6})\d{3}$/i);
+  // Terima dua panjang: "T-2DDMMYY" (EDP, 6 digit) atau "T-2DDMMYYxxx"
+  // (Cross Docking, ada 3 digit ekor/serial) — 3 digit ekor opsional.
+  const match = firstRackcode.match(/^T\s*-\s*2(\d{6})(?:\d{3})?$/i);
   return match ? match[1] : "";
 }
 
@@ -119,6 +121,7 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
     const rows = await CrossDockingClient.fetchDetailAll({ detail: true });
 
     const itemSet = new Set();
+    const barcodeSet = new Set();
     const rawRows = (rows || [])
       .map((row) => {
         const item = (getField(row, "item") || "").toString().trim();
@@ -130,12 +133,11 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
           barcodeRaw !== undefined && barcodeRaw !== null
             ? String(barcodeRaw).trim()
             : "";
-        const inWh = getInWhFromRackcode(rackcode);
+        if (barcode) barcodeSet.add(barcode);
         return {
           item,
           rackcode,
           barcode,
-          in_wh: inWh || "",
         };
       })
       .filter(Boolean);
@@ -144,21 +146,42 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
     try {
       descrMap = await KarawangEdpModel.descriptionsForItems([...itemSet]);
     } catch (err) {
-      console.error("getBarcodeLiveData: gagal ambil deskripsi dari db pandu:", err);
+      console.error(
+        "getBarcodeLiveData: gagal ambil deskripsi dari db pandu:",
+        err,
+      );
     }
 
-    const items = rawRows.map((r) => ({
-      rak: r.rackcode || "-",
-      barcode: r.barcode || "-",
-      item: r.item,
-      deskripsi: descrMap.get(r.item) || "-",
-      // "transfer": lokasi rak versi Cross Docking (live) — dulu ini
-      // beda dari `rak` (hasil upload vs hasil query EDP terpisah), sekarang
-      // sumbernya cuma satu (Cross Docking), jadi nilainya sama persis.
-      transfer: r.rackcode || "-",
-      in_wh: r.in_wh || "-",
-      week: r.in_wh ? getIsoWeekFromInWh(r.in_wh) || "-" : "-",
-    }));
+    // "transfer": rackcode versi DB-PANDU EDP (bukan Cross Docking), dicari
+    // per barcode lewat fginvc.rack (bc_entried / bc_entried_prod). Beda dari
+    // `rak` yang tetap dari Cross Docking. Barcode yang gak ketemu di EDP
+    // (misal collie sudah keluar rak / gak ada fisiknya) transfer-nya "-".
+    let edpRackMap = new Map();
+    try {
+      edpRackMap = await KarawangEdpModel.rackDetailsByBarcode([...barcodeSet]);
+    } catch (err) {
+      console.error(
+        "getBarcodeLiveData: gagal ambil rackcode dari db pandu:",
+        err,
+      );
+    }
+
+    const items = rawRows.map((r) => {
+      const transfer = edpRackMap.get(r.barcode)?.rackcodes || "";
+      // In WH & Week dihitung dari Transfer (rackcode versi EDP, format
+      // T-2DDMMYY), BUKAN dari rackcode Cross Docking (`rak`) — itu kode
+      // lokasi rak fisik (mis. "BRH12358"), gak ngandung tanggal.
+      const inWh = getInWhFromRackcode(transfer);
+      return {
+        rak: r.rackcode || "-",
+        barcode: r.barcode || "-",
+        item: r.item,
+        deskripsi: descrMap.get(r.item) || "-",
+        transfer: transfer || "-",
+        in_wh: inWh || "-",
+        week: inWh ? getIsoWeekFromInWh(inWh) || "-" : "-",
+      };
+    });
 
     const data = {
       items,
@@ -695,7 +718,10 @@ class KarawangController {
       try {
         allStock = await getAllStock({ forceRefresh: wantRefresh });
       } catch (cdErr) {
-        console.error("KarawangController.dashboardFull gagal ambil Cross Docking:", cdErr);
+        console.error(
+          "KarawangController.dashboardFull gagal ambil Cross Docking:",
+          cdErr,
+        );
         // Kalau refresh gagal TAPI masih ada cache lama, tetep tampilin cache
         // lama (mendingan data agak basi daripada dashboard blank), sambil
         // kasih tau di response kalau refresh barusan gagal.
