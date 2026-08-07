@@ -10,6 +10,11 @@ router.post("/scan-rak", KarawangController.scanRak);
 router.post("/scan-collie", KarawangController.scanCollie);
 router.post("/scan-collie/cancel", KarawangController.cancelScan);
 router.get("/dashboard", KarawangController.dashboard);
+// Dashboard versi "compare ke SEMUA stok Cross Docking" (bukan cuma rak
+// yang udah discan) — query berat cuma jalan kalau ?refresh=true (tombol
+// "Refresh Data Cross Docking" di UI), lihat catatan di
+// KarawangController.dashboardFull.
+router.get("/dashboard/full", KarawangController.dashboardFull);
 router.get("/barcode-details", KarawangController.barcodeDetails);
 
 // ── Proxy ke web "Monitoring Stock Cross Docking" (sistem terpisah,

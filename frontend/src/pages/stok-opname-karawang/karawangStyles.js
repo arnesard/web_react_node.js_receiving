@@ -116,13 +116,33 @@ export const karawangStyles = `
   .ko-progress-bar-outer { background: #f1f5f9; border-radius: 999px; height: 8px; overflow: hidden; margin-top: 6px; }
   .ko-progress-bar-inner { background: #16a34a; height: 100%; border-radius: 999px; }
 
-  .ko-item-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 12px 14px;
-    margin-bottom: 8px; }
+  .ko-item-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 10px 12px;
+    display: flex; align-items: center; gap: 10px; min-width: 0; }
   .ko-item-card-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  .ko-item-code { font-weight: 800; font-size: 13.5px; color: #0021b3; }
-  .ko-item-descr { font-size: 11.5px; color: #64748b; margin-top: 2px; }
-  .ko-item-qty { font-size: 12px; font-weight: 700; color: #0f172a; white-space: nowrap; }
+  .ko-allstock-meta { font-size: 11.5px; color: #94a3b8; }
+  .ko-item-code { font-weight: 800; font-size: 13px; color: #0021b3; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .ko-item-descr { font-size: 11px; color: #64748b; margin-top: 1px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .ko-item-qty { font-size: 11.5px; font-weight: 700; color: #0f172a; white-space: nowrap; }
   .ko-item-qty .ko-muted { color: #94a3b8; font-weight: 500; }
+  .ko-item-info { min-width: 0; flex: 1; }
+  .ko-item-pic-hint { font-size: 10.5px; color: #94a3b8; margin-top: 1px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; cursor: default; }
+
+  /* Grid biar item2 kesusun rapet & muat banyak dalam 1 layar tanpa scroll
+     panjang — sebanyak mungkin kolom yang muat (minimal 300px per kartu). */
+  .ko-items-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 8px; align-items: stretch; }
+
+  /* Progress berbentuk cincin (radial), kayak icon brightness/battery —
+     lebih compact daripada bar horizontal & enak dipindai cepat sekilas. */
+  .ko-radial { --pct: 0; --ring-color: #16a34a; width: 40px; height: 40px; border-radius: 50%;
+    flex: none; position: relative;
+    background: conic-gradient(var(--ring-color) calc(var(--pct) * 1%), #e2e8f0 0); }
+  .ko-radial::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: #fff; }
+  .ko-radial-label { position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; font-size: 9.5px; font-weight: 800; color: #0f172a; }
 
   .ko-dropdown { position: absolute; left: 16px; right: 16px; margin-top: -6px; background: #fff;
     border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.1);
