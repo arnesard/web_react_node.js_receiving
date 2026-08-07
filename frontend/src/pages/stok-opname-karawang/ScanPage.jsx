@@ -1,11 +1,15 @@
 // src/pages/stok-opname-karawang/ScanPage.jsx
-// Alur: (1) input ID karyawan sekali di awal sesi (kesimpen di
-// sessionStorage, gak perlu diulang tiap ganti lokasi) → (2) input lokasi
-// (loccol), divalidasi ke data lokasi hasil import excel → (3) scan RAK
-// (Enter), divalidasi rak ini beneran bagian dari lokasi yg diinput → (4)
-// scan COLLIE berkali-kali (Enter tiap collie), masing-masing divalidasi
-// ke API Cross Docking sebelum langsung tersimpan. Tombol "Selesai"
-// nutup sesi rak & lokasi ini, balik ke step input lokasi (karyawan tetap).
+// Alur (gak ada lagi step upload sama sekali — batch aktif dibikin
+// otomatis di backend): (1) input ID karyawan sekali di awal sesi
+// (kesimpen di sessionStorage, gak perlu diulang tiap ganti lokasi) → (2)
+// ketik/scan lokasi (loccol), langsung lanjut (belum divalidasi di sini,
+// karena gak ada rak-nya buat dicek ke Cross Docking) → (3) scan RAK
+// (Enter), divalidasi LIVE ke Cross Docking — rak-nya ada, DAN lokasi yang
+// diketik di step 2 beneran cocok sama loccode rak ini menurut Cross
+// Docking → (4) scan COLLIE berkali-kali (Enter tiap collie), masing-
+// masing divalidasi ke API Cross Docking sebelum langsung tersimpan.
+// Tombol "Selesai" nutup sesi rak & lokasi ini, balik ke step input lokasi
+// (karyawan tetap).
 import { useState, useEffect, useRef } from "react";
 import Swal from "sweetalert2";
 import { Boxes, Package, User, MapPin, CheckCircle2 } from "lucide-react";
@@ -98,25 +102,16 @@ export default function KarawangScanPage() {
     setCurrentRak(null);
   };
 
-  const handleValidasiLokasi = async (e) => {
+  // Lokasi gak lagi divalidasi di step ini — gak ada rak yang bisa dicek
+  // ke Cross Docking sebelum operator scan raknya. Validasi beneran
+  // kejadian di handleScanRak, nyocokin ke field loccode live Cross
+  // Docking punya rak yang discan.
+  const handleValidasiLokasi = (e) => {
     if (e.key !== "Enter") return;
     const kode = loccolInput.trim();
     if (!kode) return;
-    try {
-      await api.post("/stok-opname-karawang/validasi-lokasi", {
-        batch_id: batch.id,
-        loccol: kode,
-      });
-      setLoccol(kode);
-      setLoccolInput("");
-    } catch (err) {
-      Swal.fire({
-        icon: "error",
-        title: err.response?.data?.message || err.message,
-        timer: 2400,
-        showConfirmButton: false,
-      });
-    }
+    setLoccol(kode);
+    setLoccolInput("");
   };
 
   const handleGantiLokasi = () => {
@@ -241,7 +236,8 @@ export default function KarawangScanPage() {
 
       {!loadingBatch && !batch && (
         <div className="ko-empty">
-          Belum ada data Detail All Karawang. Upload dulu di menu "Upload Data".
+          Gagal memuat sesi opname. Coba refresh halaman, atau hubungi IT
+          kalau terus gagal.
         </div>
       )}
 

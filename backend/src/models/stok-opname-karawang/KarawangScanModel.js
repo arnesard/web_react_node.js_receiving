@@ -109,6 +109,46 @@ class KarawangScanModel {
     }));
   }
 
+  // Breakdown per item PER PIC (karyawan yang scan) — join ke tabel
+  // employees buat dapetin nama, dipakai dashboard buat nampilin siapa
+  // yang ngerjain item apa (KarawangController.dashboard).
+  static async summaryPerItemPerPic(batchId) {
+    const [rows] = await poolUtama.query(
+      `SELECT s.item,
+              s.id_karyawan,
+              e.employee_id AS employee_id,
+              e.name AS nama_karyawan,
+              COUNT(*) as collie_scanned,
+              SUM(s.qty) as qty_scanned
+       FROM stok_opname_karawang_scan s
+       LEFT JOIN employees e ON e.id = s.id_karyawan
+       WHERE s.batch_id = ?
+       GROUP BY s.item, s.id_karyawan, e.employee_id, e.name
+       ORDER BY qty_scanned DESC`,
+      [batchId],
+    );
+    return rows.map((r) => ({
+      item: r.item,
+      id_karyawan: r.id_karyawan,
+      employee_id: r.employee_id || null,
+      nama_karyawan:
+        r.nama_karyawan || (r.id_karyawan ? `#${r.id_karyawan}` : "Tanpa PIC"),
+      collie_scanned: Number(r.collie_scanned),
+      qty_scanned: Number(r.qty_scanned),
+    }));
+  }
+
+  // Rak-rak unik yang udah pernah discan di batch ini — dipakai buat
+  // scope target LIVE Cross Docking di dashboard (gantiin scope lokasi
+  // hasil upload manual yang udah dihapus, lihat KarawangController).
+  static async distinctRackcodes(batchId) {
+    const [rows] = await poolUtama.query(
+      `SELECT DISTINCT rackcode FROM stok_opname_karawang_scan WHERE batch_id = ?`,
+      [batchId],
+    );
+    return rows.map((r) => r.rackcode);
+  }
+
   static async totals(batchId) {
     const [rows] = await poolUtama.query(
       `SELECT COUNT(*) as total_collie, COALESCE(SUM(qty),0) as total_qty

@@ -41,7 +41,10 @@ class KarawangCrossDockingModel {
           .filter(Boolean),
       ),
     ];
-    return { rackcode: kode, items, locations };
+    // qty: total baris (pcs) buat rak ini menurut Cross Docking — dipakai
+    // KarawangController.scanRak sebagai target pcs rak ini, TANPA perlu
+    // nembak fetchDetailAll lagi terpisah (udah didapat dari query di atas).
+    return { rackcode: kode, items, locations, qty: rows.length };
   }
 
   // Step scan COLLIE: gak ada endpoint Cross Docking yang langsung nerima

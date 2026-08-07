@@ -51,10 +51,7 @@ export default function KarawangDashboardPage() {
       )}
 
       {!loading && noData && (
-        <div className="ko-empty">
-          Belum ada data. Upload dulu file Detail All Karawang di menu "Upload
-          Data".
-        </div>
+        <div className="ko-empty">Belum ada data opname untuk batch ini.</div>
       )}
 
       {!loading && data && (
@@ -118,6 +115,33 @@ export default function KarawangDashboardPage() {
                   style={{ width: `${it.persen}%` }}
                 />
               </div>
+              {it.pic && it.pic.length > 0 && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 6,
+                    marginTop: 8,
+                  }}
+                >
+                  {it.pic.map((p) => (
+                    <span
+                      key={`${it.item}-${p.id_karyawan}`}
+                      style={{
+                        fontSize: 11,
+                        background: "#eef2ff",
+                        color: "#3730a3",
+                        borderRadius: 999,
+                        padding: "3px 9px",
+                        fontWeight: 600,
+                      }}
+                      title={p.employee_id || ""}
+                    >
+                      {p.nama} · {p.qty_scanned} pcs
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </>
