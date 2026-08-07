@@ -11,7 +11,9 @@
 // Docking" di bawah. Kalau belum pernah ada yang klik refresh sama sekali
 // (belum ada cache), dashboard nampilin ajakan buat klik refresh dulu.
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, RefreshCw, AlertTriangle, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import Swal from "sweetalert2";
+import { Loader2, RefreshCw, AlertTriangle, X, Trash2, Pencil } from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
 import { karawangStyles } from "./karawangStyles";
@@ -19,9 +21,8 @@ import { karawangStyles } from "./karawangStyles";
 // Modal detail per-item: nama operator yang scan, qty, item & deskripsinya.
 // Sebelumnya info operator ini nempel langsung di card (bikin sesak di
 // layar penuh item) — sekarang dipindah ke sini, muncul pas card diklik.
-function ItemDetailModal({ item, onClose }) {
-  const pic = item.pic || [];
-  const rak = item.rak || [];
+function ItemDetailModal({ item, onClose, onEdit }) {
+  const detail = item.detail || [];
   return (
     <div className="ko-cd-modal-backdrop" onClick={onClose}>
       <div
@@ -61,58 +62,45 @@ function ItemDetailModal({ item, onClose }) {
           </div>
 
           <div className="ko-modal-section-title">
-            Rak yang sudah discan ({rak.length})
+            Operator &amp; rak yang sudah discan ({detail.length})
           </div>
-          {rak.length === 0 ? (
+          {detail.length === 0 ? (
             <div className="ko-empty" style={{ padding: "1.2rem" }}>
-              Belum ada rak yang discan buat item ini.
+              Belum ada yang scan item ini.
             </div>
           ) : (
-            <div className="ko-cd-modal-table-scroll" style={{ maxHeight: 220 }}>
-              <table className="ko-data-table">
-                <thead>
-                  <tr>
-                    <th>Rak</th>
-                    <th>Lokasi</th>
-                    <th>Qty Discan</th>
-                    <th>Collie Discan</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rak.map((r, idx) => (
-                    <tr key={`${r.rackcode}-${idx}`}>
-                      <td className="ko-strong">{r.rackcode}</td>
-                      <td>{r.loccol || "-"}</td>
-                      <td className="ko-mono">{r.qty_scanned}</td>
-                      <td className="ko-mono">{r.collie_scanned}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <div className="ko-modal-section-title">Operator yang scan</div>
-          {pic.length === 0 ? (
-            <div className="ko-empty" style={{ padding: "1.2rem" }}>
-              Belum ada operator yang scan item ini.
-            </div>
-          ) : (
-            <div className="ko-cd-modal-table-scroll" style={{ maxHeight: 220 }}>
+            <div className="ko-cd-modal-table-scroll" style={{ maxHeight: 320 }}>
               <table className="ko-data-table">
                 <thead>
                   <tr>
                     <th>Operator</th>
+                    <th>Rak</th>
+                    <th>Lokasi</th>
                     <th>Qty Discan</th>
                     <th>Collie Discan</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {pic.map((p, idx) => (
-                    <tr key={p.id_karyawan ?? idx}>
-                      <td>{p.nama}</td>
-                      <td className="ko-mono">{p.qty_scanned}</td>
-                      <td className="ko-mono">{p.collie_scanned}</td>
+                  {detail.map((d, idx) => (
+                    <tr key={`${d.id_karyawan}-${d.rackcode}-${idx}`}>
+                      <td>{d.nama}</td>
+                      <td className="ko-strong">{d.rackcode}</td>
+                      <td>{d.loccol || "-"}</td>
+                      <td className="ko-mono">{d.qty_scanned}</td>
+                      <td className="ko-mono">{d.collie_scanned}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="ko-btn-ganti"
+                          onClick={() =>
+                            onEdit({ rackcode: d.rackcode, loccol: d.loccol })
+                          }
+                        >
+                          <Pencil size={11} style={{ verticalAlign: -1 }} />{" "}
+                          Edit
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -207,6 +195,7 @@ function getItemStatus(it) {
 }
 
 export default function KarawangDashboardPage() {
+  const navigate = useNavigate();
   const [batch, setBatch] = useState(null);
   const [noBatch, setNoBatch] = useState(false);
   const [initLoading, setInitLoading] = useState(true);
@@ -262,6 +251,63 @@ export default function KarawangDashboardPage() {
   const busy = loading || refreshing;
   const fetchedAt = full?.fetched_at ? formatFetchedAt(full.fetched_at) : null;
 
+  // Tombol "Reset Data Scan" — minta sandi dulu (SweetAlert input, biar
+  // gak kepencet gak sengaja), lalu konfirmasi sekali lagi karena ini
+  // ngosongin SEMUA hasil scan (batch/target tetap ada, cuma progress
+  // scan yang balik ke 0). Kalau sandi salah, backend balikin 403 dan
+  // ditampilin apa adanya ke operator.
+  const handleTruncateScan = async () => {
+    const { value: password } = await Swal.fire({
+      title: "Reset Data Scan",
+      html: "Semua hasil scan (rak &amp; collie) akan dihapus total dan gak bisa dibalikin lagi. Masukkan sandi buat lanjut:",
+      input: "password",
+      inputPlaceholder: "Sandi",
+      showCancelButton: true,
+      confirmButtonText: "Lanjut",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#dc2626",
+      inputValidator: (value) => (!value ? "Sandi wajib diisi" : undefined),
+    });
+    if (!password) return;
+
+    const confirm = await Swal.fire({
+      icon: "warning",
+      title: "Yakin reset semua data scan?",
+      text: "Tindakan ini gak bisa dibatalkan.",
+      showCancelButton: true,
+      confirmButtonText: "Ya, reset",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#dc2626",
+    });
+    if (!confirm.isConfirmed) return;
+
+    try {
+      await api.post("/stok-opname-karawang/truncate-scan", { password });
+      Swal.fire({
+        icon: "success",
+        title: "Data scan berhasil direset",
+        timer: 1600,
+        showConfirmButton: false,
+      });
+      if (batch) loadFull(batch.id, false);
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Gagal reset data scan",
+        text: err.response?.data?.message || err.message,
+      });
+    }
+  };
+
+  // Tombol "Edit" di baris operator+rak — balik ke halaman Scan, langsung
+  // kebuka di rak itu (skip step pilih lokasi & scan rak manual) biar
+  // operator bisa langsung koreksi/tambah collie di rak yang sama. Detail
+  // rak-nya (scan_list dsb) ditarik ulang LIVE di halaman Scan, bukan
+  // dikirim dari sini, biar datanya gak basi.
+  const handleEditRak = ({ rackcode, loccol }) => {
+    navigate("/karawang", { state: { editRak: { rackcode, loccol } } });
+  };
+
   return (
     <div className="ko-page ko-page-full ko-dashboard-shell">
       <style>{karawangStyles}</style>
@@ -277,19 +323,30 @@ export default function KarawangDashboardPage() {
             <p>Stok semua item Cross Docking dibandingkan hasil scan operator.</p>
           </div>
           {!initLoading && !noBatch && batch && (
-            <button
-              type="button"
-              className="ko-btn-secondary"
-              onClick={() => loadFull(batch.id, true)}
-              disabled={busy}
-            >
-              {refreshing ? (
-                <Loader2 size={13} className="ko-spin" />
-              ) : (
-                <RefreshCw size={13} />
-              )}
-              Refresh Data Cross Docking
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                className="ko-btn-secondary"
+                onClick={() => loadFull(batch.id, true)}
+                disabled={busy}
+              >
+                {refreshing ? (
+                  <Loader2 size={13} className="ko-spin" />
+                ) : (
+                  <RefreshCw size={13} />
+                )}
+                Refresh Data Cross Docking
+              </button>
+              <button
+                type="button"
+                className="ko-btn-secondary"
+                onClick={handleTruncateScan}
+                style={{ color: "#dc2626", borderColor: "#fca5a5" }}
+              >
+                <Trash2 size={13} />
+                Reset Data Scan
+              </button>
+            </div>
           )}
         </div>
 
@@ -446,6 +503,7 @@ export default function KarawangDashboardPage() {
         <ItemDetailModal
           item={selectedItem}
           onClose={() => setSelectedItem(null)}
+          onEdit={handleEditRak}
         />
       )}
       {showVarianceModal && full?.items && (

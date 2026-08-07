@@ -10,6 +10,7 @@ router.post("/validasi-lokasi", KarawangController.validasiLokasi);
 router.post("/scan-rak", KarawangController.scanRak);
 router.post("/scan-collie", KarawangController.scanCollie);
 router.post("/scan-collie/cancel", KarawangController.cancelScan);
+router.post("/truncate-scan", KarawangController.truncateScan);
 router.get("/dashboard", KarawangController.dashboard);
 // Dashboard versi "compare ke SEMUA stok Cross Docking" (bukan cuma rak
 // yang udah discan) — query berat cuma jalan kalau ?refresh=true (tombol

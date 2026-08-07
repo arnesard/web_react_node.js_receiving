@@ -13,13 +13,29 @@
 // Tombol "Selesai" nutup sesi rak & lokasi ini, balik ke step input lokasi
 // (karyawan tetap).
 import { useState, useEffect, useRef } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import Swal from "sweetalert2";
-import { Boxes, Package, User, MapPin, CheckCircle2 } from "lucide-react";
+import {
+  Boxes,
+  Package,
+  User,
+  MapPin,
+  CheckCircle2,
+  Loader2,
+  RefreshCw,
+} from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
 import { karawangStyles } from "./karawangStyles";
 
 const KARYAWAN_SESSION_KEY = "karawang_karyawan";
+// Sebelumnya cuma karyawan yang kesimpen di sessionStorage — lokasi & rak
+// yang lagi jalan ilang tiap pindah halaman (React Router unmount total
+// komponen ini tiap pindah tab, lihat catatan usePersistedState.js di
+// modul monitoring-transfer). Sekarang lokasi & rak yang lagi discan juga
+// disimpen, biar operator gak perlu input ulang abis mampir ke Dashboard.
+const LOCCOL_SESSION_KEY = "karawang_loccol";
+const CURRENT_RAK_SESSION_KEY = "karawang_current_rak";
 
 const toastSuccess = (message) =>
   Swal.fire({
@@ -30,8 +46,12 @@ const toastSuccess = (message) =>
   });
 
 export default function KarawangScanPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [batch, setBatch] = useState(null);
   const [loadingBatch, setLoadingBatch] = useState(true);
+  const [refreshingCd, setRefreshingCd] = useState(false);
+  const [loadingEditRak, setLoadingEditRak] = useState(false);
 
   // Step 1: karyawan
   const [karyawan, setKaryawan] = useState(() => {
@@ -43,16 +63,26 @@ export default function KarawangScanPage() {
   const [showKaryawanDropdown, setShowKaryawanDropdown] = useState(false);
   const karyawanInputRef = useRef(null);
 
-  // Step 2: lokasi
-  const [loccol, setLoccol] = useState(null);
+  // Step 2: lokasi — dibaca balik dari sessionStorage pas mount, biar
+  // gak ilang tiap pindah halaman (lihat catatan di LOCCOL_SESSION_KEY).
+  const [loccol, setLoccol] = useState(
+    () => sessionStorage.getItem(LOCCOL_SESSION_KEY) || null,
+  );
   const [loccolInput, setLoccolInput] = useState("");
   const [validatingLokasi, setValidatingLokasi] = useState(false);
   const loccolInputRef = useRef(null);
 
-  // Step 3: rak & collie
+  // Step 3: rak & collie — sama, dibaca balik dari sessionStorage.
   const [rakValue, setRakValue] = useState("");
   const [collieValue, setCollieValue] = useState("");
-  const [currentRak, setCurrentRak] = useState(null); // { rackcode, item_di_rak, total_qty_target, total_qty_scanned, total_collie_scanned, scan_list }
+  const [currentRak, setCurrentRak] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem(CURRENT_RAK_SESSION_KEY);
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  }); // { rackcode, item_di_rak, total_qty_target, total_qty_scanned, total_collie_scanned, scan_list }
 
   const rakInputRef = useRef(null);
   const collieInputRef = useRef(null);
@@ -65,6 +95,41 @@ export default function KarawangScanPage() {
       .finally(() => setLoadingBatch(false));
   }, []);
 
+  // Datang dari tombol "Edit" di modal Dashboard (bawa { rackcode, loccol }
+  // lewat navigate state) → langsung set lokasi & tarik ulang detail rak
+  // itu LIVE (skip step pilih lokasi & scan rak manual), biar operator
+  // langsung nyampe di layar collie rak yang mau dikoreksi. State
+  // navigasi langsung dibersihin abis dipakai, biar gak ke-trigger ulang
+  // kalau halaman ini di-refresh atau dikunjungi lagi tanpa maksud edit.
+  useEffect(() => {
+    const editRak = location.state?.editRak;
+    if (!editRak || !batch) return;
+    navigate(location.pathname, { replace: true, state: {} });
+
+    setLoadingEditRak(true);
+    setLoccol(editRak.loccol);
+    setCurrentRak(null);
+    api
+      .post("/stok-opname-karawang/scan-rak", {
+        batch_id: batch.id,
+        rackcode: editRak.rackcode,
+        loccol: editRak.loccol,
+      })
+      .then((res) => {
+        setCurrentRak(res.data.data);
+        toastSuccess(`Rak "${editRak.rackcode}" siap diedit`);
+      })
+      .catch((err) => {
+        Swal.fire({
+          icon: "error",
+          title: `Gagal membuka rak "${editRak.rackcode}" buat diedit`,
+          text: err.response?.data?.message || err.message,
+        });
+      })
+      .finally(() => setLoadingEditRak(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batch, location.state]);
+
   useEffect(() => {
     if (!karyawan) {
       api
@@ -73,6 +138,25 @@ export default function KarawangScanPage() {
         .catch(() => setEmployees([]));
     }
   }, [karyawan]);
+
+  // Sinkronin loccol & currentRak ke sessionStorage tiap berubah — nyakup
+  // semua kasus set (dapet lokasi baru, ganti lokasi, ganti rak, selesai,
+  // ganti karyawan) sekaligus, gak perlu sentuh satu-satu tiap handler.
+  useEffect(() => {
+    if (loccol) sessionStorage.setItem(LOCCOL_SESSION_KEY, loccol);
+    else sessionStorage.removeItem(LOCCOL_SESSION_KEY);
+  }, [loccol]);
+
+  useEffect(() => {
+    if (currentRak) {
+      sessionStorage.setItem(
+        CURRENT_RAK_SESSION_KEY,
+        JSON.stringify(currentRak),
+      );
+    } else {
+      sessionStorage.removeItem(CURRENT_RAK_SESSION_KEY);
+    }
+  }, [currentRak]);
 
   useEffect(() => {
     if (!karyawan) karyawanInputRef.current?.focus();
@@ -256,14 +340,64 @@ export default function KarawangScanPage() {
     setLoccolInput("");
   };
 
+  // Sama kaya tombol "Refresh Data Cross Docking" di Dashboard — narik
+  // ulang snapshot stok Cross Docking (dipakai buat validasi lokasi & rak
+  // di halaman ini juga). Ditaruh di sini juga biar operator gak perlu
+  // pindah ke Dashboard dulu kalau lokasi/rak-nya belum kevalidasi karena
+  // datanya belum pernah/lama ditarik.
+  const handleRefreshCrossDocking = async () => {
+    if (!batch || refreshingCd) return;
+    setRefreshingCd(true);
+    try {
+      const res = await api.get("/stok-opname-karawang/dashboard/full", {
+        params: { batch_id: batch.id, refresh: true },
+      });
+      const fetchedAt = res.data?.data?.fetched_at;
+      Swal.fire({
+        icon: "success",
+        title: "Data Cross Docking berhasil diperbarui",
+        text: fetchedAt
+          ? `Terakhir ditarik: ${new Date(fetchedAt).toLocaleString("id-ID")}`
+          : undefined,
+        timer: 1800,
+        showConfirmButton: false,
+      });
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Gagal refresh data Cross Docking",
+        text: err.response?.data?.message || err.message,
+      });
+    } finally {
+      setRefreshingCd(false);
+    }
+  };
+
   return (
     <div className="ko-page">
       <style>{karawangStyles}</style>
       <KarawangSubNav />
 
-      <div className="ko-header">
-        <h1>Scan Stok Opname DC Karawang</h1>
-        <p>Input karyawan &amp; lokasi dulu, baru scan rak lalu collie.</p>
+      <div className="ko-dashboard-title-row">
+        <div className="ko-header">
+          <h1>Scan Stok Opname DC Karawang</h1>
+          <p>Input karyawan &amp; lokasi dulu, baru scan rak lalu collie.</p>
+        </div>
+        {!loadingBatch && batch && (
+          <button
+            type="button"
+            className="ko-btn-secondary"
+            onClick={handleRefreshCrossDocking}
+            disabled={refreshingCd}
+          >
+            {refreshingCd ? (
+              <Loader2 size={13} className="ko-spin" />
+            ) : (
+              <RefreshCw size={13} />
+            )}
+            Refresh Data Cross Docking
+          </button>
+        )}
       </div>
 
       {loadingBatch && <div className="ko-empty">Memuat data batch...</div>}
@@ -372,7 +506,14 @@ export default function KarawangScanPage() {
                 </button>
               </div>
 
-              {!currentRak && (
+              {!currentRak && loadingEditRak && (
+                <div className="ko-empty">
+                  <Loader2 size={18} className="ko-spin" /> Membuka rak buat
+                  diedit...
+                </div>
+              )}
+
+              {!currentRak && !loadingEditRak && (
                 <div className="ko-card">
                   <div className="ko-scan-label">Scan Kode Rak</div>
                   <input

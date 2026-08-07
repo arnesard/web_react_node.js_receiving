@@ -9,7 +9,7 @@
 // aplikasi Karawang ini, bukan akun operator yang lagi buka web Karawang.
 
 const BASE_URL =
-  process.env.CROSS_DOCKING_API_BASE_URL || "http://10.129.42.85:4000/api";
+  process.env.CROSS_DOCKING_API_BASE_URL || "http://10.129.201.250:4000/api";
 const USERNAME = process.env.CROSS_DOCKING_USERNAME;
 const PASSWORD = process.env.CROSS_DOCKING_PASSWORD;
 

@@ -134,6 +134,40 @@ class KarawangScanModel {
     }));
   }
 
+  // Breakdown per item PER OPERATOR + PER RAK sekaligus (gabungan, bukan
+  // 2 tabel terpisah) — dipakai modal detail item di dashboard biar
+  // operator, rak, dan lokasi yang dia scan ketemu dalam 1 baris yang
+  // sama, bukan 2 tabel yang berdiri sendiri-sendiri.
+  static async summaryPerItemPerPicRak(batchId) {
+    const [rows] = await poolUtama.query(
+      `SELECT s.item,
+              s.id_karyawan,
+              e.employee_id AS employee_id,
+              e.name AS nama_karyawan,
+              s.rackcode,
+              s.loccol,
+              COUNT(*) as collie_scanned,
+              SUM(s.qty) as qty_scanned
+       FROM stok_opname_karawang_scan s
+       LEFT JOIN employees e ON e.id = s.id_karyawan
+       WHERE s.batch_id = ?
+       GROUP BY s.item, s.id_karyawan, e.employee_id, e.name, s.rackcode, s.loccol
+       ORDER BY qty_scanned DESC`,
+      [batchId],
+    );
+    return rows.map((r) => ({
+      item: r.item,
+      id_karyawan: r.id_karyawan,
+      employee_id: r.employee_id || null,
+      nama_karyawan:
+        r.nama_karyawan || (r.id_karyawan ? `#${r.id_karyawan}` : "Tanpa PIC"),
+      rackcode: r.rackcode,
+      loccol: r.loccol,
+      collie_scanned: Number(r.collie_scanned),
+      qty_scanned: Number(r.qty_scanned),
+    }));
+  }
+
   // Breakdown per item PER PIC (karyawan yang scan) — join ke tabel
   // employees buat dapetin nama, dipakai dashboard buat nampilin siapa
   // yang ngerjain item apa (KarawangController.dashboard).
@@ -184,6 +218,14 @@ class KarawangScanModel {
       total_collie: Number(rows[0].total_collie),
       total_qty: Number(rows[0].total_qty),
     };
+  }
+  // TRUNCATE total tabel scan — dipakai tombol "Reset Data Scan" di
+  // Dashboard (dilindungi sandi, lihat KarawangController.truncateScan).
+  // BEDA dari KarawangBatchModel.deleteAll(): ini CUMA ngosongin tabel
+  // scan, batch/target/lokasi tetap ada — buat kasus mulai ulang hitungan
+  // scan dari nol tanpa bikin batch baru.
+  static async truncateAll() {
+    await poolUtama.query(`TRUNCATE TABLE stok_opname_karawang_scan`);
   }
 }
 

@@ -90,6 +90,12 @@ function getIsoWeekFromInWh(inWh) {
 const DASHBOARD_CACHE_TTL_MS = 45 * 1000;
 const dashboardCache = new Map(); // batch_id -> { expiresAt, data }
 
+// Sandi buat tombol "Reset Data Scan" di Dashboard — sengaja hardcode
+// simpel (project ini belum ada auth/login sama sekali, lihat catatan
+// currentUserId di atas), tujuannya cuma nyegah kepencet gak sengaja,
+// BUKAN keamanan beneran.
+const TRUNCATE_SCAN_PASSWORD = "devbpw";
+
 // Cache TERPISAH buat "Stok Semua Cross Docking" (item + qty/barcode se-DC,
 // TANPA scope rackcode) — dasar target buat dashboard versi baru (compare
 // ke SEMUA stok, bukan cuma rak yang udah discan). GAK PAKAI TTL yang
@@ -647,6 +653,29 @@ class KarawangController {
     }
   }
 
+  // POST /api/stok-opname-karawang/truncate-scan
+  // Reset TOTAL hasil scan (TRUNCATE tabel stok_opname_karawang_scan) —
+  // dilindungi sandi statis (lihat TRUNCATE_SCAN_PASSWORD) biar gak
+  // kepencet gak sengaja, dipanggil dari tombol "Reset Data Scan" di
+  // Dashboard. Batch/target/lokasi TIDAK ikut kehapus, cuma progress scan.
+  async truncateScan(req, res) {
+    try {
+      const { password } = req.body;
+      if (password !== TRUNCATE_SCAN_PASSWORD) {
+        return response.error(res, "Sandi salah.", 403);
+      }
+      await KarawangScanModel.truncateAll();
+      // Cache dashboard per-batch (TTL 45 detik) masih bisa nyimpen angka
+      // lama sesaat — bersihin biar dashboard langsung nampilin 0 abis
+      // reset, gak nunggu TTL habis.
+      dashboardCache.clear();
+      return response.success(res, { success: true });
+    } catch (err) {
+      console.error("KarawangController.truncateScan gagal:", err);
+      return response.error(res, err.message);
+    }
+  }
+
   // GET /api/stok-opname-karawang/dashboard?batch_id=
   async dashboard(req, res) {
     try {
@@ -660,35 +689,24 @@ class KarawangController {
         return response.error(res, "Batch tidak ditemukan", 404);
       }
 
-      const [{ target, total_item, total_qty_target }, scanned, picRows, rakRows] =
+      const [{ target, total_item, total_qty_target }, scanned, picRakRows] =
         await Promise.all([
           getLiveTarget(batchId),
           KarawangScanModel.summaryPerItem(batchId),
-          KarawangScanModel.summaryPerItemPerPic(batchId),
-          KarawangScanModel.summaryPerItemPerRak(batchId),
+          KarawangScanModel.summaryPerItemPerPicRak(batchId),
         ]);
       const scannedMap = new Map(scanned.map((s) => [s.item, s]));
 
-      // Kelompokin breakdown PIC per item, biar tiap item di dashboard bisa
-      // nampilin siapa aja (+ berapa qty) yang scan item itu.
-      const picByItem = new Map();
-      picRows.forEach((p) => {
-        if (!picByItem.has(p.item)) picByItem.set(p.item, []);
-        picByItem.get(p.item).push({
-          id_karyawan: p.id_karyawan,
-          employee_id: p.employee_id,
-          nama: p.nama_karyawan,
-          collie_scanned: p.collie_scanned,
-          qty_scanned: p.qty_scanned,
-        });
-      });
-
-      // Kelompokin breakdown RAK per item, buat modal detail item nampilin
-      // rak-rak mana aja yang udah discan buat item ini.
-      const rakByItem = new Map();
-      rakRows.forEach((r) => {
-        if (!rakByItem.has(r.item)) rakByItem.set(r.item, []);
-        rakByItem.get(r.item).push({
+      // Digabung jadi 1 baris per (operator + rak + lokasi) per item, biar
+      // modal detail item nampilin operator, rak, dan lokasi dalam 1 tabel
+      // yang sama — bukan 2 tabel terpisah.
+      const detailByItem = new Map();
+      picRakRows.forEach((r) => {
+        if (!detailByItem.has(r.item)) detailByItem.set(r.item, []);
+        detailByItem.get(r.item).push({
+          id_karyawan: r.id_karyawan,
+          employee_id: r.employee_id,
+          nama: r.nama_karyawan,
           rackcode: r.rackcode,
           loccol: r.loccol,
           collie_scanned: r.collie_scanned,
@@ -713,10 +731,8 @@ class KarawangController {
           persen: t.qty_target
             ? Math.min(100, Math.round((s.qty_scanned / t.qty_target) * 100))
             : 0,
-          // Siapa aja yang scan item ini (bisa lebih dari 1 orang).
-          pic: picByItem.get(t.item) || [],
-          // Rak mana aja yang udah discan buat item ini.
-          rak: rakByItem.get(t.item) || [],
+          // Operator + rak + lokasi yang scan item ini, digabung 1 baris.
+          detail: detailByItem.get(t.item) || [],
         };
       });
 
@@ -792,30 +808,23 @@ class KarawangController {
         }
       }
 
-      const [scanned, picRows, rakRows, totalScanned] = await Promise.all([
+      const [scanned, picRakRows, totalScanned] = await Promise.all([
         KarawangScanModel.summaryPerItem(batchId),
-        KarawangScanModel.summaryPerItemPerPic(batchId),
-        KarawangScanModel.summaryPerItemPerRak(batchId),
+        KarawangScanModel.summaryPerItemPerPicRak(batchId),
         KarawangScanModel.totals(batchId),
       ]);
       const scannedMap = new Map(scanned.map((s) => [s.item, s]));
 
-      const picByItem = new Map();
-      picRows.forEach((p) => {
-        if (!picByItem.has(p.item)) picByItem.set(p.item, []);
-        picByItem.get(p.item).push({
-          id_karyawan: p.id_karyawan,
-          employee_id: p.employee_id,
-          nama: p.nama_karyawan,
-          collie_scanned: p.collie_scanned,
-          qty_scanned: p.qty_scanned,
-        });
-      });
-
-      const rakByItem = new Map();
-      rakRows.forEach((r) => {
-        if (!rakByItem.has(r.item)) rakByItem.set(r.item, []);
-        rakByItem.get(r.item).push({
+      // Digabung jadi 1 baris per (operator + rak + lokasi) — sebelumnya
+      // dipecah 2 (picByItem & rakByItem) yang bikin operator, rak, dan
+      // lokasi nampil di 2 tabel terpisah di modal.
+      const detailByItem = new Map();
+      picRakRows.forEach((r) => {
+        if (!detailByItem.has(r.item)) detailByItem.set(r.item, []);
+        detailByItem.get(r.item).push({
+          id_karyawan: r.id_karyawan,
+          employee_id: r.employee_id,
+          nama: r.nama_karyawan,
           rackcode: r.rackcode,
           loccol: r.loccol,
           collie_scanned: r.collie_scanned,
@@ -838,8 +847,7 @@ class KarawangController {
           persen: t.qty
             ? Math.min(100, Math.round((s.qty_scanned / t.qty) * 100))
             : 0,
-          pic: picByItem.get(t.item) || [],
-          rak: rakByItem.get(t.item) || [],
+          detail: detailByItem.get(t.item) || [],
         };
       });
 
