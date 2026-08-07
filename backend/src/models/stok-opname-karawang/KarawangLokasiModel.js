@@ -40,6 +40,17 @@ class KarawangLokasiModel {
     );
     return rows.length > 0;
   }
+
+  // Semua rackcode unik dalam scope batch ini (gabungan dari semua lokasi
+  // yang diinput pas mulai opname) — dipakai buat narik target LIVE dari
+  // Cross Docking per rackcode (lihat KarawangController.dashboard).
+  static async distinctRackcodes(batchId) {
+    const [rows] = await poolUtama.query(
+      `SELECT DISTINCT rackcode FROM stok_opname_karawang_lokasi WHERE batch_id = ?`,
+      [batchId],
+    );
+    return rows.map((r) => r.rackcode);
+  }
 }
 
 module.exports = KarawangLokasiModel;

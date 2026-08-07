@@ -1,28 +1,51 @@
 // src/pages/stok-opname-karawang/UploadPage.jsx
-// Upload file excel "Data Detail All Karawang" → jadi data target/acuan
-// buat 1 batch opname baru. Dilakukan sekali di awal tiap sesi opname.
-import { useState, useRef } from "react";
+// Mulai opname baru: input MANUAL daftar lokasi (loccol + rackcode), BUKAN
+// upload excel lagi (Agustus 2026 — target sekarang dihitung live dari
+// Cross Docking, lihat KarawangController.dashboard). Format paste: satu
+// baris per rak, "LOCCOL,RACKCODE" (bisa juga dipisah TAB, kalau
+// copy-paste dari Excel/Google Sheets 2 kolom).
+import { useState } from "react";
 import Swal from "sweetalert2";
-import { UploadCloud, Loader2 } from "lucide-react";
+import { ListChecks, Loader2 } from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
 import { karawangStyles } from "./karawangStyles";
 
+function parseLokasiText(text) {
+  const rows = [];
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line) => {
+      const parts = line.split(/[,\t]/).map((p) => p.trim());
+      if (parts.length >= 2 && parts[0] && parts[1]) {
+        rows.push({ loccol: parts[0], rackcode: parts[1] });
+      }
+    });
+  return rows;
+}
+
 export default function KarawangUploadPage() {
   const [namaBatch, setNamaBatch] = useState("");
-  const [file, setFile] = useState(null);
-  const [uploading, setUploading] = useState(false);
-  const fileInputRef = useRef(null);
+  const [lokasiText, setLokasiText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleUpload = async () => {
-    if (!file) {
-      Swal.fire("Pilih file dulu", "File excel wajib diisi", "warning");
+  const parsedRows = parseLokasiText(lokasiText);
+
+  const handleMulai = async () => {
+    if (!parsedRows.length) {
+      Swal.fire(
+        "Belum ada data",
+        'Isi minimal 1 baris "LOCCOL,RACKCODE"',
+        "warning",
+      );
       return;
     }
 
     const confirm = await Swal.fire({
-      title: "Upload data baru?",
-      html: "Data Detail All & hasil scan yang <b>sekarang aktif</b> akan otomatis terhapus, diganti dengan data dari file ini.",
+      title: "Mulai opname baru?",
+      html: `Data lokasi & hasil scan yang <b>sekarang aktif</b> akan otomatis terhapus, diganti dengan ${parsedRows.length} baris ini.`,
       icon: "warning",
       showCancelButton: true,
       confirmButtonText: "Ya, lanjutkan",
@@ -31,32 +54,28 @@ export default function KarawangUploadPage() {
     });
     if (!confirm.isConfirmed) return;
 
-    setUploading(true);
+    setSubmitting(true);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      if (namaBatch.trim()) formData.append("nama_batch", namaBatch.trim());
-
-      const res = await api.post("/stok-opname-karawang/upload", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
+      const res = await api.post("/stok-opname-karawang/mulai-opname", {
+        nama_batch: namaBatch.trim() || undefined,
+        lokasi: parsedRows,
       });
       const data = res.data.data;
       await Swal.fire({
         icon: "success",
-        title: "Data berhasil diimport!",
+        title: "Opname baru dimulai!",
         html: `${data.message}`,
       });
       setNamaBatch("");
-      setFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      setLokasiText("");
     } catch (err) {
       Swal.fire(
-        "Gagal upload",
+        "Gagal memulai opname",
         err.response?.data?.message || err.message,
         "error",
       );
     } finally {
-      setUploading(false);
+      setSubmitting(false);
     }
   };
 
@@ -66,33 +85,64 @@ export default function KarawangUploadPage() {
       <KarawangSubNav />
 
       <div className="ko-header">
-        <h1>Upload Data Detail All Karawang</h1>
+        <h1>Mulai Opname Baru</h1>
       </div>
 
       <div className="ko-card">
-        <div className="ko-upload-box">
-          <UploadCloud size={28} style={{ marginBottom: 6 }} />
-          <div>File Data Detail All Karawang (.xlsx, .xls, atau .csv)</div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            className="ko-upload-input"
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
-          />
+        <p style={{ fontSize: 13, color: "#555", marginTop: 0 }}>
+          Gak perlu upload excel lagi — data target dihitung otomatis (live)
+          dari Cross Docking. Cukup masukin lokasi (loccol) &amp; rak yang mau
+          di-opname round ini, satu baris per rak:
+        </p>
+        <pre
+          style={{
+            background: "#f3f4f6",
+            padding: "6px 10px",
+            borderRadius: 6,
+            fontSize: 12,
+            marginBottom: 12,
+          }}
+        >
+          DCK01-B08,BRB07976{"\n"}DCK01-B08,BRB08168{"\n"}DCK01-C02,BRB20046
+        </pre>
+
+        <input
+          type="text"
+          placeholder="Nama opname (opsional)"
+          value={namaBatch}
+          onChange={(e) => setNamaBatch(e.target.value)}
+          className="ko-input"
+          style={{ marginBottom: 10, width: "100%" }}
+        />
+
+        <textarea
+          rows={10}
+          placeholder="LOCCOL,RACKCODE (satu baris per rak — bisa juga paste 2 kolom dari Excel)"
+          value={lokasiText}
+          onChange={(e) => setLokasiText(e.target.value)}
+          className="ko-input"
+          style={{ width: "100%", fontFamily: "monospace", fontSize: 13 }}
+        />
+
+        <div style={{ fontSize: 12, color: "#666", margin: "6px 0 14px" }}>
+          {parsedRows.length
+            ? `${parsedRows.length} baris valid terbaca, ${new Set(parsedRows.map((r) => r.loccol)).size} lokasi unik.`
+            : "Belum ada baris valid."}
         </div>
 
         <button
           className="ko-btn-primary"
-          onClick={handleUpload}
-          disabled={uploading}
+          onClick={handleMulai}
+          disabled={submitting}
         >
-          {uploading ? (
+          {submitting ? (
             <>
               <Loader2 size={16} className="ko-spin" /> Memproses...
             </>
           ) : (
-            "Import Data"
+            <>
+              <ListChecks size={16} /> Mulai Opname
+            </>
           )}
         </button>
       </div>

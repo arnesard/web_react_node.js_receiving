@@ -1,34 +1,44 @@
 // src/controllers/stok-opname-karawang/KarawangController.js
-// Modul "Stok Opname DC Karawang". Alur: upload file "Data Detail All
-// Karawang" (xlsx ATAU csv — format baru udah termasuk kolom Barcode &
-// Location jadi 1 file, gak perlu sheet lokasi terpisah lagi) jadi data
-// target. PENTING: Detail All itu level PCS (rackcode+barcode+item, 1
-// baris = 1 pcs asli), BUKAN level collie — kode "collie" gak pernah
-// muncul di data ini sama sekali, jadi qty target dipercaya langsung dari
-// hasil hitung baris excel, gak ada override/lookup ke EDP. Operator lalu
-// scan RAK (validasi ke rackcode+lokasi dari Detail All, DAN ke API Cross
-// Docking — rackcode harus ketemu di sana) lalu scan COLLIE (kode fisik
-// yang cuma ada pas scan lapangan, divalidasi LIVE ke API Cross Docking
-// doang — gak disandingin ke data target excel karena memang gak ada
-// datanya di situ) → tiap collie yang ketemu di Cross Docking itu baru
-// disimpan sebagai hasil opname, dengan item/qty/kategori DIAMBIL DARI
-// Cross Docking (bukan dari excel maupun db pandu) → dashboard bandingin
-// target pcs (excel) vs hasil scan pcs, dan collie ditampilin murni dari
-// hasil scan aja.
+// Modul "Stok Opname DC Karawang". Alur (Agustus 2026, versi full-live):
+// mulai opname baru dengan INPUT MANUAL daftar lokasi (loccol + rackcode
+// per lokasi) — BUKAN upload excel lagi. Data target (qty per item)
+// dihitung LIVE dari API Cross Docking tiap dashboard dibuka (dicache
+// singkat, lihat dashboard()), scoped ke rackcode-rackcode yang ada di
+// lokasi-lokasi tsb — SENGAJA gak pernah query Cross Docking tanpa filter
+// sama sekali (lihat CrossDockingController: query tanpa filter dianggap
+// kebanyakan beban buat server sumbernya).
+//
+// Operator lalu scan RAK (validasi ke lokasi yang diinput, DAN ke API
+// Cross Docking — rackcode harus ketemu di sana) lalu scan COLLIE (kode
+// fisik yang cuma ada pas scan lapangan, divalidasi LIVE ke API Cross
+// Docking) → tiap collie yang ketemu di Cross Docking itu baru disimpan
+// sebagai hasil opname, dengan item/qty/kategori DIAMBIL DARI Cross
+// Docking → dashboard bandingin target pcs (live) vs hasil scan pcs, dan
+// collie ditampilin murni dari hasil scan aja.
 //
 // CATATAN: db pandu EDP (KarawangEdpModel) SUDAH GAK DIPAKAI lagi buat
-// VERIFIKASI rak/collie — itu sepenuhnya API Cross Docking sekarang
-// (lihat KarawangCrossDockingModel). db pandu masih dipanggil di
-// scanCollie, tapi CUMA buat ambil deskripsi item (join
-// bcmcfgv1.itemcatalog) — bukan buat nentuin sah/gaknya collie.
-// KarawangEdpModel juga masih dipakai penuh di fitur lain (Halaman
-// Barcode).
-const ExcelJS = require("exceljs");
-const { Readable } = require("stream");
+// VERIFIKASI rak/collie ATAU buat data target — itu sepenuhnya API Cross
+// Docking sekarang (lihat KarawangCrossDockingModel). db pandu masih
+// dipanggil, tapi CUMA buat ambil deskripsi item (join
+// bcmcfgv1.itemcatalog) — bukan buat nentuin sah/gaknya collie atau
+// jumlah target. KarawangEdpModel juga masih dipakai penuh di fitur lain
+// (Halaman Barcode).
+//
+// PENTING — efek samping yang perlu diketahui: KarawangTargetModel (tabel
+// stok_opname_karawang_target, hasil parsing excel dulu) SEKARANG GAK
+// PERNAH DIISI LAGI karena gak ada upload excel lagi. Dashboard, scan rak,
+// dan scan collie semua udah dipindah ke sumber Cross Docking / live, TAPI
+// fitur "Halaman Barcode" (listBarcodeDetails, chart "Jumlah Barcode per
+// In WH") MASIH baca dari tabel ini — jadi fitur itu bakal selalu kosong
+// sampai dipindah ke sumber lain juga (belum dikerjain di sini, di luar
+// permintaan yang diminta).
 const KarawangTargetModel = require("../../models/stok-opname-karawang/KarawangTargetModel");
 const KarawangScanModel = require("../../models/stok-opname-karawang/KarawangScanModel");
 const KarawangEdpModel = require("../../models/stok-opname-karawang/KarawangEdpModel");
 const KarawangCrossDockingModel = require("../../models/stok-opname-karawang/KarawangCrossDockingModel");
+const CrossDockingClient = require("../../services/crossDockingClient");
+const { getField } = require("../../utils/apiField");
+const { mapWithConcurrency } = require("../../utils/concurrency");
 const KarawangBatchModel = require("../../models/stok-opname-karawang/KarawangBatchModel");
 const KarawangLokasiModel = require("../../models/stok-opname-karawang/KarawangLokasiModel");
 const response = require("../../utils/response");
@@ -36,28 +46,6 @@ const response = require("../../utils/response");
 // Belum ada auth/JWT di project ini (lihat catatan sama di modul lain).
 function currentUserId(req) {
   return req.body?.id_karyawan || req.query?.id_karyawan || null;
-}
-
-// Kolom wajib ada di sheet data (rackcode + item selalu wajib; kolom
-// collie boleh namanya "bc_entried_prod" (format lama) ATAU "barcode"
-// (format baru export "Detail All Karawang" per Agustus 2026)).
-const REQUIRED_COLUMNS_BASE = ["rackcode", "item"];
-const COLLIE_COLUMN_ALIASES = ["bc_entried_prod", "barcode"];
-// Kolom sheet "lokasi" TERPISAH — cuma dipakai sebagai fallback kalau file
-// yang diupload format LAMA (gak punya kolom "location" langsung di sheet
-// data-nya).
-const REQUIRED_COLUMNS_LOKASI = ["loccol", "rackcode"];
-
-function buildHeaderMap(sheet) {
-  const headerRow = sheet.getRow(1);
-  const map = {};
-  headerRow.eachCell((cell, colNumber) => {
-    const key = String(cell.value || "")
-      .trim()
-      .toLowerCase();
-    if (key) map[key] = colNumber;
-  });
-  return map;
 }
 
 function getInWhFromRackcode(rackcode) {
@@ -91,211 +79,138 @@ function getIsoWeekFromInWh(inWh) {
   return Math.ceil(((thursday - yearStart) / 86400000 + 1) / 7);
 }
 
-class KarawangController {
-  // POST /api/stok-opname-karawang/upload  (multipart, field: file)
-  // Terima .xlsx/.xls ATAU .csv. Parse "Data Detail All Karawang", agregasi
-  // per collie (bc_entried_prod/barcode), lalu simpan jadi batch + data
-  // target + data lokasi baru.
-  async uploadExcel(req, res) {
+// Cache dashboard per batch_id di memory proses backend (bukan per-user) —
+// tujuannya biar 10 operator/atasan yang buka dashboard bareng-bareng buat
+// batch yang SAMA gak masing-masing nembak Cross Docking sendiri-sendiri.
+// TTL pendek (bukan snapshot permanen) karena datanya emang dimaksudkan
+// live, cuma dibikin gak se-live-itu literally-setiap-request.
+const DASHBOARD_CACHE_TTL_MS = 45 * 1000;
+const dashboardCache = new Map(); // batch_id -> { expiresAt, data }
+
+// Hitung target (qty per item) LIVE dari Cross Docking, scoped ke
+// rackcode-rackcode yang ada di lokasi batch ini — dicache singkat (lihat
+// DASHBOARD_CACHE_TTL_MS) biar banyak orang buka dashboard bareng-bareng
+// gak masing-masing nembak Cross Docking sendiri-sendiri.
+async function getLiveTarget(batchId) {
+  const cached = dashboardCache.get(batchId);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  const rackcodes = await KarawangLokasiModel.distinctRackcodes(batchId);
+  const qtyPerItem = new Map(); // item -> qty (jumlah baris pcs)
+
+  // Concurrency dibatasi (bukan tembak semua rak sekaligus) — konsisten
+  // sama pola yang udah dipake di enrichWithBcCollie/verifyCollie, biar
+  // gak ngebom server Cross Docking meski scope-nya udah difilter per
+  // rackcode (BUKAN query tanpa filter sama sekali).
+  await mapWithConcurrency(rackcodes, 8, async (rackcode) => {
+    let rows;
     try {
-      if (!req.file) {
-        return response.error(res, "File wajib diupload", 422);
+      rows = await CrossDockingClient.fetchDetailAll({ rackcode });
+    } catch (err) {
+      console.error(
+        `getLiveTarget: gagal ambil detail-all rak ${rackcode} dari Cross Docking:`,
+        err,
+      );
+      return;
+    }
+    (rows || []).forEach((row) => {
+      const item = (getField(row, "item") || "").toString().trim();
+      if (!item) return;
+      qtyPerItem.set(item, (qtyPerItem.get(item) || 0) + 1);
+    });
+  });
+
+  const items = [...qtyPerItem.keys()];
+  let descrMap = new Map();
+  try {
+    descrMap = await KarawangEdpModel.descriptionsForItems(items);
+  } catch (err) {
+    console.error("getLiveTarget: gagal ambil deskripsi dari db pandu:", err);
+  }
+
+  const target = items.map((item) => ({
+    item,
+    deskripsi: descrMap.get(item) || "-",
+    qty_target: qtyPerItem.get(item),
+  }));
+
+  const data = {
+    target,
+    total_item: items.length,
+    total_qty_target: target.reduce((sum, t) => sum + t.qty_target, 0),
+  };
+  dashboardCache.set(batchId, {
+    expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS,
+    data,
+  });
+  return data;
+}
+
+class KarawangController {
+  // POST /api/stok-opname-karawang/mulai-opname  (JSON)
+  // Body: { nama_batch?: string, lokasi: [{ loccol, rackcode }, ...] }
+  // Ganti tempat upload excel yang lama — operator/admin input manual
+  // daftar lokasi (loccol) + rackcode yang jadi scope opname round ini.
+  // Data target GAK disimpan di sini — dihitung live tiap dashboard dibuka
+  // (lihat dashboard()), scoped ke rackcode-rackcode dari lokasi ini.
+  async mulaiOpname(req, res) {
+    try {
+      const { nama_batch, lokasi } = req.body;
+      if (!Array.isArray(lokasi) || !lokasi.length) {
+        return response.error(
+          res,
+          `"lokasi" wajib diisi berupa daftar {loccol, rackcode}, minimal 1 baris`,
+          422,
+        );
       }
+
       const namaBatch =
-        (req.body.nama_batch || "").trim() ||
+        (nama_batch || "").trim() ||
         `Opname ${new Date().toLocaleDateString("id-ID")}`;
 
-      const namaFile = req.file.originalname || "";
-      const isCsv =
-        /\.csv$/i.test(namaFile) || req.file.mimetype === "text/csv";
-
-      const workbook = new ExcelJS.Workbook();
-      if (isCsv) {
-        await workbook.csv.read(Readable.from(req.file.buffer));
-      } else {
-        await workbook.xlsx.load(req.file.buffer);
-      }
-
-      // Cari sheet yang punya kolom-kolom wajib (biar gak hardcode nama
-      // sheet — file dari EDP/gudang kadang beda-beda nama sheetnya).
-      let targetSheet = null;
-      let headerMap = null;
-      let colCollieName = null;
-      for (const sheet of workbook.worksheets) {
-        const map = buildHeaderMap(sheet);
-        const hasBase = REQUIRED_COLUMNS_BASE.every((c) => map[c]);
-        const collieAlias = COLLIE_COLUMN_ALIASES.find((c) => map[c]);
-        if (hasBase && collieAlias) {
-          targetSheet = sheet;
-          headerMap = map;
-          colCollieName = collieAlias;
-          break;
-        }
-      }
-
-      if (!targetSheet) {
-        return response.error(
-          res,
-          `Sheet dengan kolom ${REQUIRED_COLUMNS_BASE.join(", ")} + salah satu dari (${COLLIE_COLUMN_ALIASES.join(" / ")}) tidak ditemukan di file ini`,
-          422,
-        );
-      }
-
-      const colRackcode = headerMap["rackcode"];
-      const colItem = headerMap["item"];
-      const colCollie = headerMap[colCollieName];
-      const colProbcode = headerMap["probcode"]; // opsional
-      const colLocation = headerMap["location"]; // opsional — format baru
-
-      // Agregasi per collie: 1 collie = 1 baris target, qty = jumlah unit
-      // (baris) dengan bc_entried_prod/barcode yang sama. Sekalian, kalau
-      // sheet ini punya kolom "location", langsung petain loccol->rackcode
-      // dari situ juga (format baru, gak perlu sheet lokasi terpisah lagi).
-      const grouped = new Map(); // key: rackcode|collie
-      const lokasiSeen = new Set();
+      const seen = new Set();
       const lokasiRows = [];
-      targetSheet.eachRow((row, rowNumber) => {
-        if (rowNumber === 1) return; // skip header
-        const rackcode = String(row.getCell(colRackcode).value || "").trim();
-        const collie = String(row.getCell(colCollie).value || "").trim();
-        const item = String(row.getCell(colItem).value || "").trim();
-        if (!rackcode || !collie || !item) return; // baris kosong/rusak, skip
-
-        const probcodeRaw = colProbcode
-          ? String(row.getCell(colProbcode).value || "").trim()
-          : "";
-        const kategori = probcodeRaw ? probcodeRaw.toUpperCase() : "OK";
-
-        const key = `${rackcode}|${collie}`;
-        if (!grouped.has(key)) {
-          grouped.set(key, { rackcode, collie, item, kategori, qty: 0 });
-        }
-        grouped.get(key).qty += 1;
-
-        if (colLocation) {
-          const loccol = String(row.getCell(colLocation).value || "").trim();
-          if (loccol) {
-            const lokasiKey = `${loccol}|${rackcode}`;
-            if (!lokasiSeen.has(lokasiKey)) {
-              lokasiSeen.add(lokasiKey);
-              lokasiRows.push({ loccol, rackcode });
-            }
-          }
-        }
-      });
-
-      if (!grouped.size) {
+      for (const row of lokasi) {
+        const loccol = String(row?.loccol || "").trim();
+        const rackcode = String(row?.rackcode || "").trim();
+        if (!loccol || !rackcode) continue; // baris kosong/rusak, skip
+        const key = `${loccol}|${rackcode}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        lokasiRows.push({ loccol, rackcode });
+      }
+      if (!lokasiRows.length) {
         return response.error(
           res,
-          "Tidak ada baris data yang valid di file ini",
+          "Gak ada baris lokasi yang valid (loccol & rackcode wajib diisi tiap baris)",
           422,
         );
       }
 
-      const targetRows = [...grouped.values()];
-
-      // Fallback FORMAT LAMA: kalau sheet data gak punya kolom "location"
-      // (atau semua kosong), cari sheet "lokasi" terpisah (loccol+rackcode).
-      if (!lokasiRows.length) {
-        let lokasiSheet = null;
-        let lokasiHeaderMap = null;
-        for (const sheet of workbook.worksheets) {
-          const map = buildHeaderMap(sheet);
-          if (REQUIRED_COLUMNS_LOKASI.every((c) => map[c])) {
-            lokasiSheet = sheet;
-            lokasiHeaderMap = map;
-            break;
-          }
-        }
-        if (lokasiSheet) {
-          const colLoccol = lokasiHeaderMap["loccol"];
-          const colRackcodeLokasi = lokasiHeaderMap["rackcode"];
-          lokasiSheet.eachRow((row, rowNumber) => {
-            if (rowNumber === 1) return;
-            const loccol = String(row.getCell(colLoccol).value || "").trim();
-            const rackcodeLokasi = String(
-              row.getCell(colRackcodeLokasi).value || "",
-            ).trim();
-            if (!loccol || !rackcodeLokasi) return;
-            const key = `${loccol}|${rackcodeLokasi}`;
-            if (lokasiSeen.has(key)) return;
-            lokasiSeen.add(key);
-            lokasiRows.push({ loccol, rackcode: rackcodeLokasi });
-          });
-        }
-      }
-
-      if (!lokasiRows.length) {
-        return response.error(
-          res,
-          `Tidak ada data lokasi ditemukan — file ini butuh kolom "Location" di sheet data, atau sheet terpisah dengan kolom ${REQUIRED_COLUMNS_LOKASI.join(", ")}`,
-          422,
-        );
-      }
-
-      // Ambil deskripsi item dari db pandu (bcmcfgv1.itemcatalog) buat
-      // ditampilkan di dashboard, biar operator/atasan gak cuma liat kode item.
-      const { poolEdp } = require("../../config/database");
-      const uniqueItems = [...new Set(targetRows.map((r) => r.item))];
-      let descrMap = new Map();
-      try {
-        const [rows] = await poolEdp.query(
-          `SELECT item, descr FROM bcmcfgv1.itemcatalog WHERE item IN (?)`,
-          [uniqueItems],
-        );
-        rows.forEach((r) =>
-          descrMap.set((r.item || "").trim(), (r.descr || "").trim()),
-        );
-      } catch (err) {
-        console.error("Gagal ambil deskripsi item dari db pandu:", err);
-      }
-      targetRows.forEach((r) => {
-        r.deskripsi = descrMap.get(r.item) || "-";
-      });
-
-      // CATATAN (Agustus 2026): dulu di sini ada step "override" qty per
-      // baris pakai COUNT(*) dari db pandu (fginvc.rack), dengan asumsi
-      // kolom "Barcode"/collie di excel itu 1 kode dipakai berulang buat
-      // banyak pcs fisik (kayak format lama bc_entried_prod). Ternyata
-      // TIDAK — kolom Barcode di "Detail All" itu udah level pcs (1 baris
-      // = 1 pcs asli, kodenya unik per baris; gak ada relasi collie->banyak
-      // pcs di data ini sama sekali). Kode "collie" yang beneran (yang
-      // discan operator di lapangan) juga gak pernah muncul di Detail All.
-      // Jadi qty target sekarang dipercaya langsung dari hasil hitung baris
-      // excel (lihat `grouped.get(key).qty += 1` di atas) — gak perlu lagi
-      // nembak EDP buat "koreksi" qty, karena datanya udah akurat dari sononya.
-
-      // Data lama (target + lokasi + hasil scan sebelumnya) otomatis kehapus
-      // tiap kali upload excel baru — cukup 1 data aktif, gak numpuk batch.
+      // Data lama (lokasi + hasil scan sebelumnya) otomatis kehapus tiap
+      // kali mulai opname baru — cukup 1 data aktif, gak numpuk batch.
       await KarawangBatchModel.deleteAll();
       const batch = await KarawangBatchModel.create({
         nama_batch: namaBatch,
-        nama_file: req.file.originalname,
+        nama_file: null,
         id_karyawan_upload: currentUserId(req),
       });
 
-      await KarawangTargetModel.bulkInsert(batch.id, targetRows);
       await KarawangLokasiModel.bulkInsert(batch.id, lokasiRows);
 
-      const totalQty = targetRows.reduce((sum, r) => sum + r.qty, 0);
-      await KarawangBatchModel.updateTotals(batch.id, {
-        total_item: uniqueItems.length,
-        total_collie: targetRows.length,
-        total_qty: totalQty,
-      });
+      const totalLokasi = new Set(lokasiRows.map((r) => r.loccol)).size;
+      const totalRak = new Set(lokasiRows.map((r) => r.rackcode)).size;
 
       return response.success(res, {
         batch_id: batch.id,
         nama_batch: namaBatch,
-        total_item: uniqueItems.length,
-        total_collie: targetRows.length,
-        total_qty: totalQty,
-        total_lokasi: new Set(lokasiRows.map((r) => r.loccol)).size,
-        message: `Data berhasil diimport: ${totalQty} pcs, ${uniqueItems.length} item, ${new Set(lokasiRows.map((r) => r.loccol)).size} lokasi.`,
+        total_lokasi: totalLokasi,
+        total_rak: totalRak,
+        message: `Opname baru dimulai: ${totalLokasi} lokasi, ${totalRak} rak. Target akan dihitung live dari Cross Docking.`,
       });
     } catch (err) {
-      console.error("KarawangController.uploadExcel gagal:", err);
-      return response.error(res, "Gagal memproses file. " + err.message);
+      console.error("KarawangController.mulaiOpname gagal:", err);
+      return response.error(res, "Gagal memulai opname. " + err.message);
     }
   }
 
@@ -354,11 +269,10 @@ class KarawangController {
 
   // POST /api/stok-opname-karawang/scan-rak
   // Klik/scan kode rak dulu → validasi: (a) kebagian di lokasi yang
-  // diinput operator, (b) kebagian di data target (excel/csv "Detail All
-  // Karawang") batch ini, (c) BENERAN ADA di API Cross Docking (live) —
-  // kalau enggak, berarti rak ini gak dikenal Cross Docking dan gak boleh
-  // lanjut ke scan collie sama sekali. Sekalian tampilin progress rak tsb
-  // (sudah/berapa collie).
+  // diinput operator pas mulai opname, (b) BENERAN ADA di API Cross
+  // Docking (live) — kalau enggak, berarti rak ini gak dikenal Cross
+  // Docking dan gak boleh lanjut ke scan collie sama sekali. Sekalian
+  // tampilin progress rak tsb (sudah/berapa collie).
   async scanRak(req, res) {
     try {
       const { batch_id, rackcode, loccol } = req.body;
@@ -382,18 +296,6 @@ class KarawangController {
           res,
           `Rak "${kode}" bukan bagian dari lokasi "${kodeLoccol}". Cek lagi kode raknya, atau ganti lokasi kalau memang mau pindah.`,
           422,
-        );
-      }
-
-      const targetRak = await KarawangTargetModel.findByRackcode(
-        batch_id,
-        kode,
-      );
-      if (!targetRak.length) {
-        return response.error(
-          res,
-          `Rak "${kode}" tidak ditemukan di data Detail All Karawang untuk batch ini.`,
-          404,
         );
       }
 
@@ -555,11 +457,22 @@ class KarawangController {
         batch_id,
         kodeRak,
       );
-      const targetRak = await KarawangTargetModel.findByRackcode(
-        batch_id,
-        kodeRak,
-      );
-      const totalQtyTargetDiRak = targetRak.reduce((sum, t) => sum + t.qty, 0);
+      // Target qty pcs buat rak ini: LIVE dari Cross Docking (jumlah baris
+      // detail-all buat rackcode ini = jumlah pcs, sama pola hitungnya
+      // kayak dulu pas dari excel). Non-fatal kalau gagal — tetep balikin
+      // hasil scan collie-nya, cuma progress target di rak ini nampil null.
+      let totalQtyTargetDiRak = null;
+      try {
+        const rowsRak = await CrossDockingClient.fetchDetailAll({
+          rackcode: kodeRak,
+        });
+        totalQtyTargetDiRak = (rowsRak || []).length;
+      } catch (cdErr) {
+        console.error(
+          `Gagal ambil target qty Cross Docking buat rak ${kodeRak}:`,
+          cdErr,
+        );
+      }
 
       return response.success(res, {
         ...saved,
@@ -601,10 +514,11 @@ class KarawangController {
         return response.error(res, "Batch tidak ditemukan", 404);
       }
 
-      const [target, scanned] = await Promise.all([
-        KarawangTargetModel.summaryPerItem(batchId),
-        KarawangScanModel.summaryPerItem(batchId),
-      ]);
+      const [{ target, total_item, total_qty_target }, scanned] =
+        await Promise.all([
+          getLiveTarget(batchId),
+          KarawangScanModel.summaryPerItem(batchId),
+        ]);
       const scannedMap = new Map(scanned.map((s) => [s.item, s]));
 
       const items = target.map((t) => {
@@ -617,9 +531,8 @@ class KarawangController {
           deskripsi: t.deskripsi,
           qty_target: t.qty_target,
           qty_scanned: s.qty_scanned,
-          // collie_scanned: murni hasil scan, TANPA target — data target dari
-          // excel Detail All gak punya info collie yang reliable (lihat
-          // catatan di bagian import/upload di atas).
+          // collie_scanned: murni hasil scan, TANPA target — Cross Docking
+          // gak punya sumber collie target yang reliable (cuma qty pcs).
           collie_scanned: s.collie_scanned,
           sisa_qty: t.qty_target - s.qty_scanned,
           persen: t.qty_target
@@ -634,17 +547,17 @@ class KarawangController {
         batch,
         items,
         ringkasan: {
-          total_item: batch.total_item,
-          total_qty_target: batch.total_qty,
+          total_item,
+          total_qty_target,
           // total_collie_scanned: murni jumlah collie yang udah discan,
           // TANPA dibandingin ke target — gak ada sumber collie target yang
-          // reliable di excel Detail All.
+          // reliable dari Cross Docking.
           total_collie_scanned: totalScanned.total_collie,
           total_qty_scanned: totalScanned.total_qty,
-          persen: batch.total_qty
+          persen: total_qty_target
             ? Math.min(
                 100,
-                Math.round((totalScanned.total_qty / batch.total_qty) * 100),
+                Math.round((totalScanned.total_qty / total_qty_target) * 100),
               )
             : 0,
         },

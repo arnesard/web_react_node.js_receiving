@@ -11,7 +11,11 @@ class KarawangCrossDockingModel {
   // Docking (bukan di data target excel batch ini — itu urusan
   // KarawangTargetModel yang tetap jalan terpisah). Balikin daftar item
   // unik yang ada di rak itu menurut Cross Docking, buat dipakai lagi pas
-  // verifikasi collie (hindari nebak-nebak item).
+  // verifikasi collie (hindari nebak-nebak item). Sekalian balikin daftar
+  // lokasi (loccode) unik dari rak ini menurut Cross Docking LIVE — dipakai
+  // KarawangController.scanRak buat validasi lokasi operator TANPA nembak
+  // API tambahan (field ini udah ikut kebalikin di /stock-cd/detail-all
+  // yang sama, cuma belum dipetain sebelumnya).
   // Balikin null kalau rackcode gak ketemu sama sekali di Cross Docking.
   static async rackExists(rackcode) {
     const kode = (rackcode || "").trim();
@@ -30,7 +34,14 @@ class KarawangCrossDockingModel {
           .filter(Boolean),
       ),
     ];
-    return { rackcode: kode, items };
+    const locations = [
+      ...new Set(
+        rows
+          .map((r) => (getField(r, "loccode") || "").toString().trim())
+          .filter(Boolean),
+      ),
+    ];
+    return { rackcode: kode, items, locations };
   }
 
   // Step scan COLLIE: gak ada endpoint Cross Docking yang langsung nerima

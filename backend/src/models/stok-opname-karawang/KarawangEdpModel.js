@@ -22,6 +22,13 @@ class KarawangEdpModel {
     return map;
   }
 
+  // Public: ambil deskripsi banyak item sekaligus dari bcmcfgv1.itemcatalog
+  // (dashboard). Balikin Map<item, deskripsi> — item yang gak ketemu di
+  // katalog gak ada di Map, panggil pake `map.get(item) || "-"`.
+  static async descriptionsForItems(items) {
+    return this._getDescriptions([...new Set(items)]);
+  }
+
   // Public: ambil deskripsi 1 item dari bcmcfgv1.itemcatalog. Dipake pas
   // scan collie — item/qty/kategori sekarang dari Cross Docking, tapi
   // deskripsinya tetap join ke db pandu (Cross Docking gak nyediain
