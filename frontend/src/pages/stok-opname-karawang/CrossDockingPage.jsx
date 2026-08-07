@@ -116,16 +116,15 @@ const DETAIL_ALL_COLUMNS = [
 ];
 
 // Sama kayak DETAIL_ALL_COLUMNS, tapi khusus buat CSV export: nyelipin
-// kolom Bc Collie (posisinya sama kayak popup Detail per-item di web
-// asli: setelah Judge, sebelum Location).
+// kolom Collie (field aslinya bc_collie) tepat setelah Barcode.
 const DETAIL_ALL_EXPORT_COLUMNS = [
   { key: "rackcode", label: "Rackcode" },
   { key: "barcode", label: "Barcode" },
+  { key: "bc_collie", label: "Collie" },
   { key: "item", label: "Item" },
   { key: "curweek", label: "Cur Week" },
   { key: "probcode", label: "Probcode" },
   { key: "jdge", label: "Judge" },
-  { key: "bc_collie", label: "Bc Collie" },
   { key: "loccode", label: "Location" },
   { key: "hold_reason1", label: "Hold QC" },
   { key: "hold_reason2", label: "Hold QA" },
@@ -144,17 +143,12 @@ function csvEscape(value) {
 // auto dari field yang ada di data (dipake buat Ringkasan/Summary).
 function downloadCsv(rows, filenamePrefix, columns) {
   if (!rows || rows.length === 0) return;
-  const cols = columns
-    ? columns.map((c) => c.key)
-    : collectColumns(rows);
+  const cols = columns ? columns.map((c) => c.key) : collectColumns(rows);
   const headerRow = columns ? columns.map((c) => c.label) : cols;
   const getValue = columns
     ? (row, key) => getFieldValue(row, key)
     : (row, key) => row[key];
-  const csv = [
-    headerRow,
-    ...rows.map((r) => cols.map((c) => getValue(r, c))),
-  ]
+  const csv = [headerRow, ...rows.map((r) => cols.map((c) => getValue(r, c)))]
     .map((row) => row.map(csvEscape).join(","))
     .join("\r\n");
   const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8;" });
@@ -311,8 +305,8 @@ function DetailAllModal({
           {exporting && (
             <div className="ko-cd-truncate-notice">
               Lagi narik data Bc Collie buat semua baris — bisa makan waktu
-              beberapa menit kalau kombinasi rack/item-nya banyak. Jangan
-              tutup halaman ini dulu.
+              beberapa menit kalau kombinasi rack/item-nya banyak. Jangan tutup
+              halaman ini dulu.
             </div>
           )}
 
@@ -533,7 +527,11 @@ export default function CrossDockingPage() {
         "cross-docking-detail-all",
         DETAIL_ALL_EXPORT_COLUMNS,
       );
-      if (meta && meta.bcCollieEnriched === false && meta.bcCollieSkippedReason) {
+      if (
+        meta &&
+        meta.bcCollieEnriched === false &&
+        meta.bcCollieSkippedReason
+      ) {
         setDetailNote(meta.bcCollieSkippedReason);
       }
     } catch (err) {

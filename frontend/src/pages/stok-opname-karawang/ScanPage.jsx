@@ -4,7 +4,7 @@
 // (loccol), divalidasi ke data lokasi hasil import excel → (3) scan RAK
 // (Enter), divalidasi rak ini beneran bagian dari lokasi yg diinput → (4)
 // scan COLLIE berkali-kali (Enter tiap collie), masing-masing divalidasi
-// ke db pandu + data target sebelum langsung tersimpan. Tombol "Selesai"
+// ke API Cross Docking sebelum langsung tersimpan. Tombol "Selesai"
 // nutup sesi rak & lokasi ini, balik ke step input lokasi (karyawan tetap).
 import { useState, useEffect, useRef } from "react";
 import Swal from "sweetalert2";
@@ -158,6 +158,10 @@ export default function KarawangScanPage() {
         collie: kode,
         id_karyawan: karyawan.id,
         loccol,
+        // Dari respons scan-rak (KarawangCrossDockingModel.rackExists),
+        // biar backend gak perlu query ulang daftar item rak ini ke Cross
+        // Docking.
+        items_cross_docking: currentRak.items_cross_docking,
       });
       const data = res.data.data;
       setCurrentRak((prev) => ({
@@ -166,16 +170,16 @@ export default function KarawangScanPage() {
         total_collie_scanned: data.total_collie_scanned_di_rak,
         scan_list: [data, ...prev.scan_list],
       }));
-      // Ketemu di db pandu (fginvc.rack, bc_entried_prod) DAN di data
-      // "Detail All Karawang" — dua-duanya udah dicek di backend sebelum
-      // sampe sini, jadi popup ini nandain kalau collie-nya sah.
+      // Ketemu di API Cross Docking (rak + item + collie-nya), sudah
+      // dicek di backend sebelum sampe sini, jadi popup ini nandain kalau
+      // collie-nya sah.
       Swal.fire({
         icon: "success",
         title: "Barcode ditemukan!",
         html:
           `Item <b>${data.item}</b> (${data.deskripsi})<br/>` +
           `Qty: <b>${data.qty}</b> — Kategori: ${data.kategori}<br/>` +
-          `<span style="font-size:12px;color:#15803d">✓ Cocok di database EDP (Pandu) &amp; Detail All Karawang</span>`,
+          `<span style="font-size:12px;color:#15803d">✓ Cocok di Cross Docking</span>`,
         timer: 1800,
         showConfirmButton: false,
       });

@@ -5,6 +5,7 @@
 // dan balikin hasilnya apa adanya — gak ngubah bentuk datanya, biar
 // field apapun yang dibalikin API itu tetap kepake di frontend.
 const CrossDockingClient = require("../../services/crossDockingClient");
+const { getField } = require("../../utils/apiField");
 
 function filtersFromQuery(query) {
   return {
@@ -38,18 +39,6 @@ function hasAnyFilter(filters) {
   );
 }
 
-// Ambil field dari row API luar biarpun gak yakin persis casing-nya
-// (rackcode / RACKCODE / rackCode).
-function getField(row, key) {
-  if (!row) return undefined;
-  if (row[key] !== undefined) return row[key];
-  const upper = key.toUpperCase();
-  if (row[upper] !== undefined) return row[upper];
-  const lower = key.toLowerCase();
-  if (row[lower] !== undefined) return row[lower];
-  return undefined;
-}
-
 // Jalanin `mapper` ke tiap item di `items`, maksimal `limit` request
 // bersamaan — biar gak nembak puluhan/ratusan request ke server Cross
 // Docking sekaligus dan bikin dia keteteran/nge-rate-limit kita.
@@ -79,7 +68,10 @@ async function mapWithConcurrency(items, limit, mapper) {
 // gak overload server sumber) — null/Infinity = gak ada batas. Dipake beda
 // antara tampilan web (dibatasi, harus cepat) dan export CSV (gak
 // dibatasi, karena user emang udah sengaja nunggu & butuh datanya lengkap).
-async function enrichWithBcCollie(rows, { maxPairs = 150, concurrency = 8 } = {}) {
+async function enrichWithBcCollie(
+  rows,
+  { maxPairs = 150, concurrency = 8 } = {},
+) {
   const pairs = new Map(); // "rackcode||item" -> { rackcode, item }
   rows.forEach((row) => {
     const rackcode = getField(row, "rackcode");
@@ -94,7 +86,11 @@ async function enrichWithBcCollie(rows, { maxPairs = 150, concurrency = 8 } = {}
     return { rows, bcCollieEnriched: true, bcCollieSkippedReason: undefined };
   }
 
-  if (maxPairs != null && Number.isFinite(maxPairs) && uniquePairs.length > maxPairs) {
+  if (
+    maxPairs != null &&
+    Number.isFinite(maxPairs) &&
+    uniquePairs.length > maxPairs
+  ) {
     return {
       rows,
       bcCollieEnriched: false,
@@ -104,6 +100,7 @@ async function enrichWithBcCollie(rows, { maxPairs = 150, concurrency = 8 } = {}
 
   const barcodeToBcCollie = new Map();
   let anyPairFailed = false;
+  let loggedSampleKeys = false; // debug: cetak sekali aja biar log gak banjir
 
   await mapWithConcurrency(uniquePairs, concurrency, async (pair) => {
     try {
@@ -112,10 +109,22 @@ async function enrichWithBcCollie(rows, { maxPairs = 150, concurrency = 8 } = {}
         pair.item,
       );
       (detailRows || []).forEach((detailRow) => {
-        const barcode = getField(detailRow, "barcode");
+        // barcode di-String()-in biar konsisten dipake sebagai key Map,
+        // soalnya detail-all vs detail bisa aja balikin barcode dengan
+        // tipe beda (angka vs string) walau nilainya sama.
+        const barcodeRaw = getField(detailRow, "barcode");
         const bcCollie = getField(detailRow, "bc_collie");
-        if (barcode !== undefined) {
-          barcodeToBcCollie.set(barcode, bcCollie);
+        if (barcodeRaw !== undefined) {
+          barcodeToBcCollie.set(String(barcodeRaw), bcCollie);
+        }
+        if (!loggedSampleKeys) {
+          loggedSampleKeys = true;
+          console.log(
+            "[CrossDocking] Contoh key dari /stock-cd/detail:",
+            Object.keys(detailRow || {}),
+            "-> bc_collie kebaca:",
+            bcCollie,
+          );
         }
       });
     } catch (err) {
@@ -128,7 +137,8 @@ async function enrichWithBcCollie(rows, { maxPairs = 150, concurrency = 8 } = {}
   });
 
   const enrichedRows = rows.map((row) => {
-    const barcode = getField(row, "barcode");
+    const barcodeRaw = getField(row, "barcode");
+    const barcode = barcodeRaw !== undefined ? String(barcodeRaw) : undefined;
     const bcCollie =
       barcode !== undefined && barcodeToBcCollie.has(barcode)
         ? barcodeToBcCollie.get(barcode)
@@ -140,7 +150,7 @@ async function enrichWithBcCollie(rows, { maxPairs = 150, concurrency = 8 } = {}
     rows: enrichedRows,
     bcCollieEnriched: !anyPairFailed,
     bcCollieSkippedReason: anyPairFailed
-      ? "Sebagian data Bc Collie gagal diambil (koneksi ke server Cross Docking sempat gagal untuk sebagian rack/item). Baris yang gagal akan tampil \"-\" di kolom Bc Collie."
+      ? 'Sebagian data Bc Collie gagal diambil (koneksi ke server Cross Docking sempat gagal untuk sebagian rack/item). Baris yang gagal akan tampil "-" di kolom Bc Collie.'
       : undefined,
   };
 }
@@ -239,7 +249,8 @@ class CrossDockingController {
       console.error("CrossDockingController.detailAllExport gagal:", err);
       res.status(502).json({
         message:
-          err.message || "Gagal menyiapkan data export Detail All Cross Docking",
+          err.message ||
+          "Gagal menyiapkan data export Detail All Cross Docking",
       });
     }
   }

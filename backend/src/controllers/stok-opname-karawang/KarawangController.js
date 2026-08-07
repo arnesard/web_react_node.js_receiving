@@ -6,17 +6,29 @@
 // baris = 1 pcs asli), BUKAN level collie — kode "collie" gak pernah
 // muncul di data ini sama sekali, jadi qty target dipercaya langsung dari
 // hasil hitung baris excel, gak ada override/lookup ke EDP. Operator lalu
-// scan RAK (validasi ke rackcode+lokasi dari Detail All) lalu scan COLLIE
-// (kode fisik yang cuma ada pas scan lapangan, divalidasi LIVE ke db pandu
-// fginvc.rack doang — gak disandingin ke data target excel karena memang
-// gak ada datanya di situ) → tiap collie yang ketemu di rack itu baru
-// disimpan sebagai hasil opname → dashboard bandingin target pcs (excel)
-// vs hasil scan pcs, dan collie ditampilin murni dari hasil scan aja.
+// scan RAK (validasi ke rackcode+lokasi dari Detail All, DAN ke API Cross
+// Docking — rackcode harus ketemu di sana) lalu scan COLLIE (kode fisik
+// yang cuma ada pas scan lapangan, divalidasi LIVE ke API Cross Docking
+// doang — gak disandingin ke data target excel karena memang gak ada
+// datanya di situ) → tiap collie yang ketemu di Cross Docking itu baru
+// disimpan sebagai hasil opname, dengan item/qty/kategori DIAMBIL DARI
+// Cross Docking (bukan dari excel maupun db pandu) → dashboard bandingin
+// target pcs (excel) vs hasil scan pcs, dan collie ditampilin murni dari
+// hasil scan aja.
+//
+// CATATAN: db pandu EDP (KarawangEdpModel) SUDAH GAK DIPAKAI lagi buat
+// VERIFIKASI rak/collie — itu sepenuhnya API Cross Docking sekarang
+// (lihat KarawangCrossDockingModel). db pandu masih dipanggil di
+// scanCollie, tapi CUMA buat ambil deskripsi item (join
+// bcmcfgv1.itemcatalog) — bukan buat nentuin sah/gaknya collie.
+// KarawangEdpModel juga masih dipakai penuh di fitur lain (Halaman
+// Barcode).
 const ExcelJS = require("exceljs");
 const { Readable } = require("stream");
 const KarawangTargetModel = require("../../models/stok-opname-karawang/KarawangTargetModel");
 const KarawangScanModel = require("../../models/stok-opname-karawang/KarawangScanModel");
 const KarawangEdpModel = require("../../models/stok-opname-karawang/KarawangEdpModel");
+const KarawangCrossDockingModel = require("../../models/stok-opname-karawang/KarawangCrossDockingModel");
 const KarawangBatchModel = require("../../models/stok-opname-karawang/KarawangBatchModel");
 const KarawangLokasiModel = require("../../models/stok-opname-karawang/KarawangLokasiModel");
 const response = require("../../utils/response");
@@ -343,9 +355,10 @@ class KarawangController {
   // POST /api/stok-opname-karawang/scan-rak
   // Klik/scan kode rak dulu → validasi: (a) kebagian di lokasi yang
   // diinput operator, (b) kebagian di data target (excel/csv "Detail All
-  // Karawang") batch ini. Sekalian tampilin progress rak tsb (sudah/berapa
-  // collie). Validasi live ke db pandu dilakuin nanti pas scan COLLIE, bukan
-  // di step ini.
+  // Karawang") batch ini, (c) BENERAN ADA di API Cross Docking (live) —
+  // kalau enggak, berarti rak ini gak dikenal Cross Docking dan gak boleh
+  // lanjut ke scan collie sama sekali. Sekalian tampilin progress rak tsb
+  // (sudah/berapa collie).
   async scanRak(req, res) {
     try {
       const { batch_id, rackcode, loccol } = req.body;
@@ -384,6 +397,27 @@ class KarawangController {
         );
       }
 
+      let rakDiCrossDocking;
+      try {
+        rakDiCrossDocking = await KarawangCrossDockingModel.rackExists(kode);
+      } catch (cdErr) {
+        console.error("KarawangCrossDockingModel.rackExists gagal:", cdErr);
+        return res.status(502).json({
+          status: "error",
+          message:
+            "Gagal terhubung ke API Cross Docking. Coba lagi, atau hubungi IT kalau terus gagal.",
+          data: null,
+          cross_docking_unreachable: true,
+        });
+      }
+      if (!rakDiCrossDocking) {
+        return response.error(
+          res,
+          `Rak "${kode}" tidak ditemukan di Cross Docking. Cek lagi kode raknya.`,
+          404,
+        );
+      }
+
       const sudahDiscanCollie = await KarawangScanModel.countByRak(
         batch_id,
         kode,
@@ -408,6 +442,11 @@ class KarawangController {
         // pembandingnya.
         total_collie_scanned: sudahDiscanCollie,
         scan_list: await KarawangScanModel.listByRak(batch_id, kode),
+        // Dikirim balik biar frontend bisa nyimpen & kirim ulang lewat
+        // body scan-collie (field `items_cross_docking`) — biar gak perlu
+        // manggil rackExists() dua kali (sekali di sini, sekali lagi di
+        // scanCollie) buat rak yang sama.
+        items_cross_docking: rakDiCrossDocking.items,
       });
     } catch (err) {
       console.error("KarawangController.scanRak gagal:", err);
@@ -416,14 +455,23 @@ class KarawangController {
   }
 
   // POST /api/stok-opname-karawang/scan-collie
-  // Validasi sebelum disimpan: LIVE ke db pandu (fginvc.rack) — collie ini
-  // beneran ada & isinya apa/berapa SEKARANG. TIDAK disandingin ke data
-  // target excel ("Detail All"), karena kode collie emang gak pernah
-  // muncul di situ — Detail All cuma level pcs (rackcode+barcode+item),
-  // gak punya info collie sama sekali (lihat juga catatan di uploadExcel).
+  // Validasi sebelum disimpan: LIVE ke API Cross Docking — collie ini
+  // beneran ada & isinya apa/berapa SEKARANG (item, qty, kategori/probcode
+  // SEMUA diambil dari Cross Docking, bukan dari excel maupun db pandu).
+  // TIDAK disandingin ke data target excel ("Detail All"), karena kode
+  // collie emang gak pernah muncul di situ — Detail All cuma level pcs
+  // (rackcode+barcode+item), gak punya info collie sama sekali (lihat juga
+  // catatan di uploadExcel).
   async scanCollie(req, res) {
     try {
-      const { batch_id, rackcode, collie, id_karyawan, loccol } = req.body;
+      const {
+        batch_id,
+        rackcode,
+        collie,
+        id_karyawan,
+        loccol,
+        items_cross_docking, // optional, dari respons scan-rak — hindari rackExists() dobel
+      } = req.body;
       if (!batch_id || !rackcode || !collie) {
         return response.error(
           res,
@@ -447,26 +495,43 @@ class KarawangController {
         });
       }
 
-      // Validasi: live ke db pandu (fginvc.rack) doang, gak disandingin
-      // sama data target excel.
-      let verifEdp;
+      // Validasi: live ke API Cross Docking doang (gak ke db pandu lagi),
+      // gak disandingin sama data target excel.
+      let verifCd;
       try {
-        verifEdp = await KarawangEdpModel.verifyCollie(kodeCollie);
-      } catch (edpErr) {
-        console.error("KarawangEdpModel.verifyCollie gagal:", edpErr);
+        verifCd = await KarawangCrossDockingModel.verifyCollie(
+          kodeRak,
+          kodeCollie,
+          Array.isArray(items_cross_docking) ? items_cross_docking : undefined,
+        );
+      } catch (cdErr) {
+        console.error("KarawangCrossDockingModel.verifyCollie gagal:", cdErr);
         return res.status(502).json({
           status: "error",
           message:
-            "Gagal terhubung ke database EDP (db pandu). Coba lagi, atau hubungi IT kalau terus gagal.",
+            "Gagal terhubung ke API Cross Docking. Coba lagi, atau hubungi IT kalau terus gagal.",
           data: null,
-          edp_unreachable: true,
+          cross_docking_unreachable: true,
         });
       }
-      if (!verifEdp) {
+      if (!verifCd) {
         return response.error(
           res,
-          `Collie "${kodeCollie}" tidak ditemukan di database EDP. Cek lagi kode collie-nya.`,
+          `Collie "${kodeCollie}" tidak ditemukan di Cross Docking untuk rak "${kodeRak}". Cek lagi kode collie-nya.`,
           404,
+        );
+      }
+
+      // Deskripsi item tetap dari db pandu (bcmcfgv1.itemcatalog) — Cross
+      // Docking gak nyediain deskripsi. Non-fatal kalau gagal: tetap
+      // lanjut simpan collie-nya, deskripsi cuma tampil "-".
+      let deskripsi = "-";
+      try {
+        deskripsi = await KarawangEdpModel.descriptionForItem(verifCd.item);
+      } catch (descErr) {
+        console.error(
+          `Gagal ambil deskripsi item ${verifCd.item} dari db pandu:`,
+          descErr,
         );
       }
 
@@ -474,10 +539,10 @@ class KarawangController {
         batch_id,
         rackcode: kodeRak,
         collie: kodeCollie,
-        item: verifEdp.item,
-        deskripsi: verifEdp.deskripsi,
-        kategori: verifEdp.kategori,
-        qty: verifEdp.qty,
+        item: verifCd.item,
+        deskripsi,
+        kategori: verifCd.kategori,
+        qty: verifCd.qty,
         id_karyawan: id_karyawan || currentUserId(req),
         loccol: loccol || null,
       });
@@ -494,17 +559,14 @@ class KarawangController {
         batch_id,
         kodeRak,
       );
-      const totalQtyTargetDiRak = targetRak.reduce(
-        (sum, t) => sum + t.qty,
-        0,
-      );
+      const totalQtyTargetDiRak = targetRak.reduce((sum, t) => sum + t.qty, 0);
 
       return response.success(res, {
         ...saved,
         total_qty_scanned_di_rak: totalQtyDiRak,
         total_qty_target_di_rak: totalQtyTargetDiRak,
         total_collie_scanned_di_rak: totalCollieDiRak,
-        message: `Collie ${kodeCollie} (${verifEdp.item}, qty ${verifEdp.qty}) berhasil disimpan.`,
+        message: `Collie ${kodeCollie} (${verifCd.item}, qty ${verifCd.qty}) berhasil disimpan.`,
       });
     } catch (err) {
       console.error("KarawangController.scanCollie gagal:", err);
@@ -619,8 +681,7 @@ class KarawangController {
       const items = targets.map((t) => {
         const edpDetail = edpMap.get(String(t.barcode || "").trim()) || {};
         const rak = t.rackcodes_upload || "";
-        const transfer =
-          edpDetail.rackcodes || t.rackcodes_upload || "";
+        const transfer = edpDetail.rackcodes || t.rackcodes_upload || "";
         const inWh = getInWhFromRackcode(transfer);
         return {
           ...t,

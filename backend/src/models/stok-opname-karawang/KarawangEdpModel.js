@@ -22,6 +22,17 @@ class KarawangEdpModel {
     return map;
   }
 
+  // Public: ambil deskripsi 1 item dari bcmcfgv1.itemcatalog. Dipake pas
+  // scan collie — item/qty/kategori sekarang dari Cross Docking, tapi
+  // deskripsinya tetap join ke db pandu (Cross Docking gak nyediain
+  // deskripsi). Balikin "-" kalau item gak ketemu di katalog.
+  static async descriptionForItem(item) {
+    const kode = (item || "").trim();
+    if (!kode) return "-";
+    const map = await this._getDescriptions([kode]);
+    return map.get(kode) || "-";
+  }
+
   // Verifikasi 1 collie: fginvc.rack itu 1 baris = 1 pcs, gak punya kolom
   // qty — jadi qty per collie dihitung dari COUNT(*) baris yang punya
   // bc_entried_prod (kode collie) yang sama, digroup per item+probcode
@@ -66,7 +77,9 @@ class KarawangEdpModel {
   static async rackDetailsByBarcode(barcodes, chunkSize = 1000) {
     const map = new Map();
     const cleanBarcodes = [
-      ...new Set((barcodes || []).map((b) => String(b || "").trim()).filter(Boolean)),
+      ...new Set(
+        (barcodes || []).map((b) => String(b || "").trim()).filter(Boolean),
+      ),
     ];
     if (!cleanBarcodes.length) return map;
 
