@@ -102,6 +102,81 @@ const dashboardCache = new Map(); // batch_id -> { expiresAt, data }
 let allStockCache = null; // { data, fetchedAt } — cuma 1 entry, gak per-batch
 let allStockPromise = null; // biar request bareng-bareng numpang 1 query aja
 
+// Cache row-level buat Halaman Barcode versi live Cross Docking (barcode,
+// rackcode, item per baris — beda dari allStockCache yang cuma nyimpen
+// AGREGAT qty per item, gak per-barcode). Pola cache-nya SAMA kayak
+// allStockCache: gak ada TTL auto-expire, cuma diisi/diganti pas operator
+// klik tombol "Refresh Data Cross Docking" di halaman Barcode (query
+// `/stock-cd/detail-all` TANPA filter itu berat buat server sumbernya).
+let barcodeLiveCache = null; // { data } — data.items = array per-barcode
+let barcodeLivePromise = null;
+
+async function getBarcodeLiveData({ forceRefresh = false } = {}) {
+  if (!forceRefresh && barcodeLiveCache) return barcodeLiveCache.data;
+  if (barcodeLivePromise) return barcodeLivePromise;
+
+  barcodeLivePromise = (async () => {
+    const rows = await CrossDockingClient.fetchDetailAll({ detail: true });
+
+    const itemSet = new Set();
+    const rawRows = (rows || [])
+      .map((row) => {
+        const item = (getField(row, "item") || "").toString().trim();
+        if (!item) return null;
+        itemSet.add(item);
+        const rackcode = (getField(row, "rackcode") || "").toString().trim();
+        const barcodeRaw = getField(row, "barcode");
+        const barcode =
+          barcodeRaw !== undefined && barcodeRaw !== null
+            ? String(barcodeRaw).trim()
+            : "";
+        const inWh = getInWhFromRackcode(rackcode);
+        return {
+          item,
+          rackcode,
+          barcode,
+          in_wh: inWh || "",
+        };
+      })
+      .filter(Boolean);
+
+    let descrMap = new Map();
+    try {
+      descrMap = await KarawangEdpModel.descriptionsForItems([...itemSet]);
+    } catch (err) {
+      console.error("getBarcodeLiveData: gagal ambil deskripsi dari db pandu:", err);
+    }
+
+    const items = rawRows.map((r) => ({
+      rak: r.rackcode || "-",
+      barcode: r.barcode || "-",
+      item: r.item,
+      deskripsi: descrMap.get(r.item) || "-",
+      // "transfer": lokasi rak versi Cross Docking (live) — dulu ini
+      // beda dari `rak` (hasil upload vs hasil query EDP terpisah), sekarang
+      // sumbernya cuma satu (Cross Docking), jadi nilainya sama persis.
+      transfer: r.rackcode || "-",
+      in_wh: r.in_wh || "-",
+      week: r.in_wh ? getIsoWeekFromInWh(r.in_wh) || "-" : "-",
+    }));
+
+    const data = {
+      items,
+      total_item: itemSet.size,
+      total_barcode: items.length,
+      fetched_at: new Date().toISOString(),
+    };
+    barcodeLiveCache = { data };
+    return data;
+  })();
+
+  try {
+    return await barcodeLivePromise;
+  } finally {
+    barcodeLivePromise = null;
+  }
+}
+
 // Hitung target (qty per item) LIVE dari Cross Docking, scoped ke
 // rackcode-rackcode yang ada di lokasi batch ini — dicache singkat (lihat
 // DASHBOARD_CACHE_TTL_MS) biar banyak orang buka dashboard bareng-bareng
@@ -743,6 +818,57 @@ class KarawangController {
       return response.success(res, { batch, items });
     } catch (err) {
       console.error("KarawangController.barcodeDetails gagal:", err);
+      return response.error(res, err.message);
+    }
+  }
+
+  // GET /api/stok-opname-karawang/barcode-details-live?batch_id=&refresh=true
+  // Versi baru Halaman Barcode: ambil LANGSUNG dari Cross Docking (per
+  // baris/barcode), bukan lagi dari tabel target hasil upload Detail All
+  // yang udah gak pernah keisi lagi (lihat catatan besar di atas file ini).
+  // Sama kayak dashboardFull: query `/stock-cd/detail-all` TANPA filter itu
+  // berat, jadi CUMA jalan pas ?refresh=true (tombol "Refresh Data Cross
+  // Docking" di UI) — kalau belum pernah ada yang refresh sama sekali,
+  // balikin has_data:false.
+  async barcodeDetailsLive(req, res) {
+    try {
+      const batchId = req.query.batch_id;
+      if (!batchId) {
+        return response.error(res, "batch_id wajib diisi", 422);
+      }
+      const batch = await KarawangBatchModel.findById(batchId);
+      if (!batch) {
+        return response.error(res, "Batch tidak ditemukan", 404);
+      }
+
+      const wantRefresh = req.query.refresh === "true";
+      if (!wantRefresh && !barcodeLiveCache) {
+        return response.success(res, { batch, has_data: false });
+      }
+
+      let data;
+      try {
+        data = await getBarcodeLiveData({ forceRefresh: wantRefresh });
+      } catch (cdErr) {
+        console.error(
+          "KarawangController.barcodeDetailsLive gagal ambil Cross Docking:",
+          cdErr,
+        );
+        if (barcodeLiveCache) {
+          data = barcodeLiveCache.data;
+        } else {
+          return res.status(502).json({
+            status: "error",
+            message:
+              "Gagal mengambil data dari Cross Docking. Coba klik Refresh lagi beberapa saat.",
+            data: null,
+          });
+        }
+      }
+
+      return response.success(res, { batch, has_data: true, ...data });
+    } catch (err) {
+      console.error("KarawangController.barcodeDetailsLive gagal:", err);
       return response.error(res, err.message);
     }
   }

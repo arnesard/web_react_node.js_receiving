@@ -1,7 +1,13 @@
 // src/pages/stok-opname-karawang/BarcodePage.jsx
-// Tabel barcode dari hasil upload Detail All Karawang, diperkaya rackcode
-// transfer dari database EDP dan kalkulasi in WH + week.
-import { useEffect, useMemo, useState } from "react";
+// Tabel barcode LANGSUNG dari Cross Docking (per baris/barcode, live),
+// diperkaya deskripsi item dari EDP dan kalkulasi in WH + week dari
+// rackcode. Sama kayak Dashboard "Refresh Data Cross Docking": query
+// `/stock-cd/detail-all` TANPA filter itu berat buat server sumbernya,
+// jadi CUMA jalan pas operator eksplisit klik tombol Refresh — kalau
+// belum pernah ada yang klik refresh sama sekali, halaman ini nampilin
+// ajakan buat klik refresh dulu (gak pernah nembak Cross Docking sendiri
+// pas halaman dibuka/refresh browser biasa).
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { Bar } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -18,13 +24,22 @@ import {
   ChevronRight,
   Download,
   Loader2,
+  RefreshCw,
+  AlertTriangle,
   Search,
 } from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
 import { karawangStyles } from "./karawangStyles";
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend,
+);
 
 const PAGE_SIZE = 50;
 
@@ -50,34 +65,77 @@ function inWhToIso(inWh) {
   return `20${yy}-${mm}-${dd}`;
 }
 
+// Format tanggal jadi dd/mm/yy + jam terpisah, konsisten sama Dashboard.
+function formatFetchedAt(iso) {
+  const d = new Date(iso);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = String(d.getFullYear()).slice(-2);
+  const time = d.toLocaleTimeString("id-ID", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  return { date: `${dd}/${mm}/${yy}`, time };
+}
+
 export default function KarawangBarcodePage() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [noData, setNoData] = useState(false);
+  const [batch, setBatch] = useState(null);
+  const [noBatch, setNoBatch] = useState(false);
+  const [initLoading, setInitLoading] = useState(true);
+
+  const [data, setData] = useState(null); // payload dari /barcode-details-live
+  const [loading, setLoading] = useState(false); // load biasa (pakai cache)
+  const [refreshing, setRefreshing] = useState(false); // klik tombol Refresh
+  const [error, setError] = useState("");
+
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
+  const loadData = useCallback((batchId, refresh) => {
+    if (refresh) setRefreshing(true);
+    else setLoading(true);
+    setError("");
+    return api
+      .get("/stok-opname-karawang/barcode-details-live", {
+        params: { batch_id: batchId, ...(refresh ? { refresh: "true" } : {}) },
+      })
+      .then((res) => setData(res.data.data))
+      .catch((err) => {
+        setError(
+          err.response?.data?.message ||
+            "Gagal mengambil data barcode. Coba lagi.",
+        );
+      })
+      .finally(() => {
+        setLoading(false);
+        setRefreshing(false);
+      });
+  }, []);
+
   useEffect(() => {
     api
       .get("/stok-opname-karawang/batches/active")
       .then((res) => {
-        const batch = res.data.data;
-        if (!batch) {
-          setNoData(true);
-          setLoading(false);
-          return null;
+        const b = res.data.data;
+        if (!b) {
+          setNoBatch(true);
+          setInitLoading(false);
+          return;
         }
-        return api
-          .get("/stok-opname-karawang/barcode-details", {
-            params: { batch_id: batch.id },
-          })
-          .then((res2) => setData(res2.data.data));
+        setBatch(b);
+        return loadData(b.id, false).finally(() => setInitLoading(false));
       })
-      .catch(() => setNoData(true))
-      .finally(() => setLoading(false));
-  }, []);
+      .catch(() => {
+        setNoBatch(true);
+        setInitLoading(false);
+      });
+  }, [loadData]);
+
+  const busy = loading || refreshing;
+  const fetchedAt = data?.fetched_at ? formatFetchedAt(data.fetched_at) : null;
 
   // Item yang tampil di tabel/CSV/grafik: gabungan filter search (rak,
   // barcode, item, deskripsi, transfer, in_wh, week) dan rentang tanggal
@@ -129,9 +187,7 @@ export default function KarawangBarcodePage() {
     const knownKeys = [...counts.keys()]
       .filter((k) => k !== "-")
       .sort((a, b) => a.localeCompare(b));
-    const orderedKeys = counts.has("-")
-      ? [...knownKeys, "-"]
-      : knownKeys;
+    const orderedKeys = counts.has("-") ? [...knownKeys, "-"] : knownKeys;
 
     return {
       labels: orderedKeys.map((k) =>
@@ -189,7 +245,7 @@ export default function KarawangBarcodePage() {
     });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    const batchName = (data?.batch?.nama_batch || "barcode-karawang")
+    const batchName = (batch?.nama_batch || "barcode-karawang")
       .trim()
       .replace(/[^\w-]+/g, "-")
       .replace(/-+/g, "-")
@@ -208,245 +264,277 @@ export default function KarawangBarcodePage() {
       <style>{karawangStyles}</style>
       <KarawangSubNav />
 
-      <div className="ko-header">
-        <h1>Barcode Detail All Karawang</h1>
-        <p>Barcode hasil upload, item, deskripsi EDP, transfer, in WH, week.</p>
+      <div className="ko-dashboard-title-row">
+        <div className="ko-header">
+          <h1>Barcode Detail All Karawang</h1>
+          <p>
+            Barcode langsung dari Cross Docking, item, deskripsi EDP, transfer,
+            in WH, week.
+          </p>
+        </div>
+        {!initLoading && !noBatch && batch && (
+          <button
+            type="button"
+            className="ko-btn-secondary"
+            onClick={() => loadData(batch.id, true)}
+            disabled={busy}
+          >
+            {refreshing ? (
+              <Loader2 size={13} className="ko-spin" />
+            ) : (
+              <RefreshCw size={13} />
+            )}
+            Refresh Data Cross Docking
+          </button>
+        )}
       </div>
 
-      {loading && (
+      {initLoading && (
         <div className="ko-empty">
-          <Loader2 size={20} className="ko-spin" /> Memuat data barcode...
+          <Loader2 size={20} className="ko-spin" /> Memuat halaman barcode...
         </div>
       )}
 
-      {!loading && noData && (
-        <div className="ko-empty">
-          Belum ada data. Upload dulu file Detail All Karawang di menu "Upload
-          Data".
-        </div>
+      {!initLoading && noBatch && (
+        <div className="ko-empty">Belum ada batch opname aktif.</div>
       )}
 
-      {!loading && data && (
+      {!initLoading && !noBatch && batch && (
         <>
-          <div className="ko-batch-badge">
-            <Barcode size={13} /> {data.batch.nama_batch}
-          </div>
+          {fetchedAt && (
+            <div className="ko-allstock-meta" style={{ marginBottom: 10 }}>
+              <strong>
+                Data Cross Docking terakhir diambil: {fetchedAt.date}
+              </strong>
+              <span className="ko-allstock-time">, {fetchedAt.time}</span>
+            </div>
+          )}
 
-          <div className="ko-card">
-            <div className="ko-chart-header">
-              <h2 className="ko-chart-title">Jumlah Barcode per In WH</h2>
-              <div className="ko-date-filter">
-                <div className="ko-date-field">
-                  <span className="ko-date-field-label">Dari</span>
-                  <input
-                    type="date"
-                    className="ko-date-input"
-                    value={dateFrom}
-                    max={dateTo || undefined}
-                    onChange={(e) => {
-                      setDateFrom(e.target.value);
-                      setCurrentPage(1);
-                    }}
-                    aria-label="Dari tanggal"
-                  />
-                </div>
-                <span className="ko-date-sep">–</span>
-                <div className="ko-date-field">
-                  <span className="ko-date-field-label">Sampai</span>
-                  <input
-                    type="date"
-                    className="ko-date-input"
-                    value={dateTo}
-                    min={dateFrom || undefined}
-                    onChange={(e) => {
-                      setDateTo(e.target.value);
-                      setCurrentPage(1);
-                    }}
-                    aria-label="Sampai tanggal"
-                  />
-                </div>
-                {(dateFrom || dateTo) && (
-                  <button
-                    type="button"
-                    className="ko-date-reset"
-                    onClick={() => {
-                      setDateFrom("");
-                      setDateTo("");
-                      setCurrentPage(1);
-                    }}
-                    title="Reset filter tanggal"
-                  >
-                    Reset
-                  </button>
-                )}
+          {refreshing && (
+            <div className="ko-empty">
+              <Loader2 size={20} className="ko-spin" /> Menarik semua barcode
+              dari Cross Docking... (bisa agak lama, mohon tunggu)
+            </div>
+          )}
+
+          {!refreshing && loading && (
+            <div className="ko-empty">
+              <Loader2 size={20} className="ko-spin" /> Memuat data barcode...
+            </div>
+          )}
+
+          {!refreshing && !loading && error && (
+            <div className="ko-empty">
+              <AlertTriangle size={18} /> {error}
+            </div>
+          )}
+
+          {!refreshing && !loading && !error && data && !data.has_data && (
+            <div className="ko-card" style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 13, color: "#475569", marginBottom: 10 }}>
+                Belum ada data barcode Cross Docking yang ditarik. Klik tombol
+                "Refresh Data Cross Docking" di atas buat mulai (bisa agak lama
+                pertama kali, tergantung banyaknya stok se-DC).
               </div>
             </div>
-            {filteredItems.length === 0 ? (
-              <div className="ko-empty">Tidak ada data untuk ditampilkan di grafik.</div>
-            ) : (
-              <div className="ko-chart-wrap">
-                <Bar
-                  data={inWhChartData}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                      legend: { display: false },
-                      tooltip: {
-                        callbacks: {
-                          label: (ctx) => `${ctx.parsed.y} barcode`,
+          )}
+
+          {!refreshing && !loading && !error && data && data.has_data && (
+            <>
+              <div className="ko-batch-badge">
+                <Barcode size={13} /> {batch.nama_batch}
+              </div>
+
+              <div className="ko-card">
+                <div className="ko-chart-header">
+                  <h2 className="ko-chart-title">Jumlah Barcode per In WH</h2>
+                  <div className="ko-date-filter">
+                    <div className="ko-date-field">
+                      <input
+                        type="date"
+                        className="ko-date-input"
+                        value={dateFrom}
+                        max={dateTo || undefined}
+                        onChange={(e) => {
+                          setDateFrom(e.target.value);
+                          setCurrentPage(1);
+                        }}
+                        aria-label="Dari tanggal"
+                      />
+                    </div>
+                    <span className="ko-date-sep">–</span>
+                    <div className="ko-date-field">
+                      <input
+                        type="date"
+                        className="ko-date-input"
+                        value={dateTo}
+                        min={dateFrom || undefined}
+                        onChange={(e) => {
+                          setDateTo(e.target.value);
+                          setCurrentPage(1);
+                        }}
+                        aria-label="Sampai tanggal"
+                      />
+                    </div>
+                    {(dateFrom || dateTo) && (
+                      <button
+                        type="button"
+                        className="ko-date-reset"
+                        onClick={() => {
+                          setDateFrom("");
+                          setDateTo("");
+                          setCurrentPage(1);
+                        }}
+                        title="Reset filter tanggal"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {filteredItems.length === 0 ? (
+                  <div className="ko-empty">
+                    Tidak ada data untuk ditampilkan di grafik.
+                  </div>
+                ) : (
+                  <div className="ko-chart-wrap">
+                    <Bar
+                      data={inWhChartData}
+                      options={{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                          legend: { display: false },
+                          tooltip: {
+                            callbacks: {
+                              label: (ctx) => `${ctx.parsed.y} barcode`,
+                            },
+                          },
                         },
-                      },
-                    },
-                    scales: {
-                      x: { title: { display: true, text: "In WH" } },
-                      y: {
-                        beginAtZero: true,
-                        ticks: { precision: 0 },
-                        title: { display: true, text: "Jumlah Barcode" },
-                      },
-                    },
-                  }}
-                />
-              </div>
-            )}
-          </div>
-
-          <div className="ko-card">
-            <div className="ko-table-toolbar">
-              <label className="ko-search-wrap">
-                <Search size={16} />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => {
-                    setSearch(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                  placeholder="Cari barcode, item, deskripsi, transfer..."
-                />
-              </label>
-              <div className="ko-date-filter">
-                <div className="ko-date-field">
-                  <span className="ko-date-field-label">Dari</span>
-                  <input
-                    type="date"
-                    className="ko-date-input"
-                    value={dateFrom}
-                    max={dateTo || undefined}
-                    onChange={(e) => {
-                      setDateFrom(e.target.value);
-                      setCurrentPage(1);
-                    }}
-                    aria-label="Dari tanggal"
-                  />
-                </div>
-                <span className="ko-date-sep">–</span>
-                <div className="ko-date-field">
-                  <span className="ko-date-field-label">Sampai</span>
-                  <input
-                    type="date"
-                    className="ko-date-input"
-                    value={dateTo}
-                    min={dateFrom || undefined}
-                    onChange={(e) => {
-                      setDateTo(e.target.value);
-                      setCurrentPage(1);
-                    }}
-                    aria-label="Sampai tanggal"
-                  />
-                </div>
-                {(dateFrom || dateTo) && (
-                  <button
-                    type="button"
-                    className="ko-date-reset"
-                    onClick={() => {
-                      setDateFrom("");
-                      setDateTo("");
-                      setCurrentPage(1);
-                    }}
-                    title="Reset filter tanggal"
-                  >
-                    Reset
-                  </button>
+                        scales: {
+                          x: { title: { display: true, text: "In WH" } },
+                          y: {
+                            beginAtZero: true,
+                            ticks: { precision: 0 },
+                            title: { display: true, text: "Jumlah Barcode" },
+                          },
+                        },
+                      }}
+                    />
+                  </div>
                 )}
               </div>
-              <button
-                className="ko-btn-secondary ko-btn-download"
-                onClick={handleDownloadCsv}
-                disabled={filteredItems.length === 0}
-              >
-                <Download size={16} /> Download CSV
-              </button>
-            </div>
-            <div className="ko-table-info">
-              {filteredItems.length
-                ? `${pageStart + 1}-${pageEnd} dari ${filteredItems.length}`
-                : "0"}{" "}
-              barcode tampil, total {data.items.length}
-            </div>
-          </div>
 
-          <div className="ko-table-card">
-            <div className="ko-table-scroll">
-              <table className="ko-data-table">
-                <thead>
-                  <tr>
-                    <th>Rak</th>
-                    <th>Barcode</th>
-                    <th>Item</th>
-                    <th>Deskripsi</th>
-                    <th>Transfer</th>
-                    <th>In WH</th>
-                    <th>Week</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredItems.length === 0 && (
-                    <tr>
-                      <td colSpan={7} className="ko-table-empty">
-                        Data tidak ditemukan.
-                      </td>
-                    </tr>
-                  )}
-                  {paginatedItems.map((it, index) => (
-                    <tr key={`${it.barcode}-${it.item}-${index}`}>
-                      <td className="ko-mono">{it.rak}</td>
-                      <td className="ko-mono">{it.barcode}</td>
-                      <td className="ko-strong">{it.item}</td>
-                      <td>{it.deskripsi}</td>
-                      <td className="ko-mono">{it.transfer}</td>
-                      <td className="ko-mono">{it.in_wh}</td>
-                      <td>{it.week}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="ko-pagination">
-              <button
-                className="ko-page-btn"
-                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-                disabled={safePage === 1}
-                title="Halaman sebelumnya"
-              >
-                <ChevronLeft size={16} /> Prev
-              </button>
-              <div className="ko-page-status">
-                Halaman {safePage} / {pageCount}
+              <div className="ko-card">
+                <div className="ko-table-toolbar">
+                  <label className="ko-search-wrap">
+                    <Search size={16} />
+                    <input
+                      type="text"
+                      value={search}
+                      onChange={(e) => {
+                        setSearch(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      placeholder="Cari barcode, item, deskripsi, transfer..."
+                    />
+                  </label>
+                  <div className="ko-date-filter">
+                    {(dateFrom || dateTo) && (
+                      <button
+                        type="button"
+                        className="ko-date-reset"
+                        onClick={() => {
+                          setDateFrom("");
+                          setDateTo("");
+                          setCurrentPage(1);
+                        }}
+                        title="Reset filter tanggal"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                  <button
+                    className="ko-btn-secondary ko-btn-download"
+                    onClick={handleDownloadCsv}
+                    disabled={filteredItems.length === 0}
+                  >
+                    <Download size={16} /> Download CSV
+                  </button>
+                </div>
+                <div className="ko-table-info">
+                  {filteredItems.length
+                    ? `${pageStart + 1}-${pageEnd} dari ${filteredItems.length}`
+                    : "0"}{" "}
+                  barcode tampil, total {data.items.length}
+                </div>
               </div>
-              <button
-                className="ko-page-btn"
-                onClick={() =>
-                  setCurrentPage((page) => Math.min(pageCount, page + 1))
-                }
-                disabled={safePage === pageCount}
-                title="Halaman berikutnya"
-              >
-                Next <ChevronRight size={16} />
-              </button>
-            </div>
-          </div>
+
+              <div className="ko-table-card">
+                <div className="ko-table-scroll">
+                  <table className="ko-data-table">
+                    <thead>
+                      <tr>
+                        <th>Rak</th>
+                        <th>Barcode</th>
+                        <th>Item</th>
+                        <th>Deskripsi</th>
+                        <th>Transfer</th>
+                        <th>In WH</th>
+                        <th>Week</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredItems.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="ko-table-empty">
+                            Data tidak ditemukan.
+                          </td>
+                        </tr>
+                      )}
+                      {paginatedItems.map((it, index) => (
+                        <tr key={`${it.barcode}-${it.item}-${index}`}>
+                          <td className="ko-mono">{it.rak}</td>
+                          <td className="ko-mono">{it.barcode}</td>
+                          <td className="ko-strong">{it.item}</td>
+                          <td>{it.deskripsi}</td>
+                          <td className="ko-mono">{it.transfer}</td>
+                          <td className="ko-mono">{it.in_wh}</td>
+                          <td>{it.week}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="ko-pagination">
+                  <button
+                    className="ko-page-btn"
+                    onClick={() =>
+                      setCurrentPage((page) => Math.max(1, page - 1))
+                    }
+                    disabled={safePage === 1}
+                    title="Halaman sebelumnya"
+                  >
+                    <ChevronLeft size={16} /> Prev
+                  </button>
+                  <div className="ko-page-status">
+                    Halaman {safePage} / {pageCount}
+                  </div>
+                  <button
+                    className="ko-page-btn"
+                    onClick={() =>
+                      setCurrentPage((page) => Math.min(pageCount, page + 1))
+                    }
+                    disabled={safePage === pageCount}
+                    title="Halaman berikutnya"
+                  >
+                    Next <ChevronRight size={16} />
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </>
       )}
     </div>

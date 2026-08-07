@@ -5,6 +5,22 @@
 export const karawangStyles = `
   .ko-page { max-width: 720px; margin: 0 auto; padding: 16px 14px 40px; color: #1e293b; }
   .ko-page-wide { max-width: 1180px; }
+  /* Versi desktop full layar (dipakai dashboard DC Karawang) — gak dibatasi
+     720px kayak mobile, tapi tetep dikasih cap gede biar baris teks/kartu
+     gak melar konyol di layar ultrawide. */
+  .ko-page-full { max-width: 1900px; }
+
+  /* Dashboard: navbar s/d 3 card ringkasan "freeze" (gak ikut discroll),
+     cuma grid item di bawahnya yang punya scroll sendiri. Tinggi dihitung
+     dari viewport dikurangin padding vertikal #main-content (lihat
+     AppLayout.jsx: 1.75rem atas+bawah desktop, 1.25rem di mobile). */
+  .ko-dashboard-shell { display: flex; flex-direction: column;
+    height: calc(100vh - 3.5rem); padding-bottom: 0; }
+  .ko-dashboard-fixed { flex: 0 0 auto; }
+  .ko-dashboard-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 2px 2px 16px; }
+  @media (max-width: 992px) {
+    .ko-dashboard-shell { height: calc(100vh - 2.5rem); }
+  }
 
   .ko-subnav { display: flex; gap: 6px; margin-bottom: 16px;
     background: #fff; border-radius: 12px; padding: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
@@ -25,6 +41,11 @@ export const karawangStyles = `
   .ko-header { margin-bottom: 14px; }
   .ko-header h1 { font-size: 19px; font-weight: 800; color: #0f172a; margin: 0 0 4px; }
   .ko-header p { font-size: 12.5px; color: #64748b; margin: 0; }
+
+  /* Row judul dashboard sejajar sama tombol Refresh Data Cross Docking. */
+  .ko-dashboard-title-row { display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap; }
+  .ko-dashboard-title-row .ko-header { margin-bottom: 14px; flex: 1 1 260px; }
 
   .ko-batch-badge { display: inline-flex; align-items: center; gap: 6px; background: #eef2ff;
     color: #4338ca; font-weight: 700; font-size: 12px; padding: 6px 12px; border-radius: 999px;
@@ -116,10 +137,40 @@ export const karawangStyles = `
   .ko-progress-bar-outer { background: #f1f5f9; border-radius: 999px; height: 8px; overflow: hidden; margin-top: 6px; }
   .ko-progress-bar-inner { background: #16a34a; height: 100%; border-radius: 999px; }
 
-  .ko-item-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 10px 12px;
-    display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .ko-item-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 6px 8px;
+    display: flex; align-items: center; gap: 6px; min-width: 0; cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s; text-align: left; width: 100%;
+    font: inherit; color: inherit; appearance: none; }
+  .ko-item-card:hover { border-color: #94a3b8; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+  .ko-item-card .ko-item-code { font-size: 11.5px; }
+  .ko-item-card .ko-item-descr { font-size: 10px; }
+  .ko-item-card .ko-item-qty { font-size: 10.5px; }
+  .ko-item-card .ko-radial { width: 26px; height: 26px; }
+  .ko-item-card .ko-radial-label { font-size: 7.5px; }
+
+  /* 3 status warna: putih = belum discan sama sekali, kuning = lagi proses
+     (sebagian kescan), hijau = selesai/qty udah sesuai target. */
+  .ko-item-card-empty { background: #fff; border-color: #e2e8f0; }
+  .ko-item-card-progress { background: #fefce8; border-color: #fbbf24; }
+  .ko-item-card-progress .ko-item-code { color: #92400e; }
+  .ko-item-card-done { background: #f0fdf4; border-color: #4ade80; }
+  .ko-item-card-done .ko-item-code { color: #166534; }
+
+  /* Summary box variance dibikin bisa diklik buat liat rincian item yang
+     belum kescan lengkap. */
+  .ko-summary-box-clickable { cursor: pointer; border: none; font: inherit; text-align: center;
+    color: inherit; appearance: none; }
+  .ko-summary-box-clickable:hover { filter: brightness(1.08); }
+
+  .ko-modal-detail-row { display: flex; justify-content: space-between; gap: 10px;
+    font-size: 12.5px; color: #334155; padding: 4px 0; }
+  .ko-modal-detail-row strong { color: #0f172a; }
+  .ko-modal-section-title { font-size: 11px; font-weight: 800; color: #94a3b8;
+    text-transform: uppercase; letter-spacing: 0.04em; margin: 14px 0 8px; }
   .ko-item-card-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
   .ko-allstock-meta { font-size: 11.5px; color: #94a3b8; }
+  .ko-allstock-meta strong { color: #334155; font-weight: 800; }
+  .ko-allstock-time { color: #38bdf8; font-weight: 600; }
   .ko-item-code { font-weight: 800; font-size: 13px; color: #0021b3; white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; }
   .ko-item-descr { font-size: 11px; color: #64748b; margin-top: 1px; white-space: nowrap;
@@ -131,9 +182,10 @@ export const karawangStyles = `
     overflow: hidden; text-overflow: ellipsis; cursor: default; }
 
   /* Grid biar item2 kesusun rapet & muat banyak dalam 1 layar tanpa scroll
-     panjang — sebanyak mungkin kolom yang muat (minimal 300px per kartu). */
-  .ko-items-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 8px; align-items: stretch; }
+     panjang — sebanyak mungkin kolom yang muat (minimal 210px per kartu,
+     kartu dibikin kecil biar makin banyak muat sekali pandang). */
+  .ko-items-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 6px; align-items: stretch; }
 
   /* Progress berbentuk cincin (radial), kayak icon brightness/battery —
      lebih compact daripada bar horizontal & enak dipindai cepat sekilas. */

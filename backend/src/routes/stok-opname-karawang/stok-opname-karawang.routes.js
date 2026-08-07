@@ -16,6 +16,9 @@ router.get("/dashboard", KarawangController.dashboard);
 // KarawangController.dashboardFull.
 router.get("/dashboard/full", KarawangController.dashboardFull);
 router.get("/barcode-details", KarawangController.barcodeDetails);
+// Versi live: langsung dari Cross Docking (per baris/barcode), query berat
+// cuma jalan kalau ?refresh=true — sama pola caching-nya kayak dashboard/full.
+router.get("/barcode-details-live", KarawangController.barcodeDetailsLive);
 
 // ── Proxy ke web "Monitoring Stock Cross Docking" (sistem terpisah,
 // diakses lewat API + login, lihat services/crossDockingClient.js) ──
