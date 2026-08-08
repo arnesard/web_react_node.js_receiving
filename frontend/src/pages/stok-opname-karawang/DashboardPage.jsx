@@ -13,7 +13,14 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import Swal from "sweetalert2";
-import { Loader2, RefreshCw, AlertTriangle, X, Trash2, Pencil } from "lucide-react";
+import {
+  Loader2,
+  RefreshCw,
+  AlertTriangle,
+  X,
+  Trash2,
+  Pencil,
+} from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
 import { karawangStyles } from "./karawangStyles";
@@ -69,7 +76,10 @@ function ItemDetailModal({ item, onClose, onEdit }) {
               Belum ada yang scan item ini.
             </div>
           ) : (
-            <div className="ko-cd-modal-table-scroll" style={{ maxHeight: 320 }}>
+            <div
+              className="ko-cd-modal-table-scroll"
+              style={{ maxHeight: 320 }}
+            >
               <table className="ko-data-table">
                 <thead>
                   <tr>
@@ -320,7 +330,9 @@ export default function KarawangDashboardPage() {
         <div className="ko-dashboard-title-row">
           <div className="ko-header">
             <h1>Dashboard Stok Opname DC Karawang</h1>
-            <p>Stok semua item Cross Docking dibandingkan hasil scan operator.</p>
+            <p>
+              Stok semua item Cross Docking dibandingkan hasil scan operator.
+            </p>
           </div>
           {!initLoading && !noBatch && batch && (
             <div style={{ display: "flex", gap: 8 }}>
@@ -392,7 +404,9 @@ export default function KarawangDashboardPage() {
 
             {!refreshing && !loading && !error && full && !full.has_data && (
               <div className="ko-card" style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 13, color: "#475569", marginBottom: 10 }}>
+                <div
+                  style={{ fontSize: 13, color: "#475569", marginBottom: 10 }}
+                >
                   Belum ada data stok Cross Docking yang ditarik. Klik tombol
                   "Refresh Data Cross Docking" di atas buat mulai (bisa agak
                   lama pertama kali, tergantung banyaknya stok se-DC).
@@ -404,7 +418,9 @@ export default function KarawangDashboardPage() {
               <>
                 <div className="ko-summary-grid">
                   <div className="ko-summary-box">
-                    <strong>{full.ringkasan.total_barcode.toLocaleString("id-ID")}</strong>
+                    <strong>
+                      {full.ringkasan.total_barcode.toLocaleString("id-ID")}
+                    </strong>
                     <span>TOTAL BARCODE (TIRE)</span>
                   </div>
                   <button
@@ -414,13 +430,25 @@ export default function KarawangDashboardPage() {
                     title="Klik buat liat item yang belum discan lengkap"
                     style={
                       full.ringkasan.variance !== 0
-                        ? { background: "linear-gradient(135deg, #b91c1c, #dc2626)" }
-                        : { background: "linear-gradient(135deg, #15803d, #16a34a)" }
+                        ? {
+                            background:
+                              "linear-gradient(135deg, #b91c1c, #dc2626)",
+                          }
+                        : {
+                            background:
+                              "linear-gradient(135deg, #15803d, #16a34a)",
+                          }
                     }
                   >
                     <strong>
-                      {full.ringkasan.variance > 0 ? "-" : full.ringkasan.variance < 0 ? "+" : ""}
-                      {Math.abs(full.ringkasan.variance).toLocaleString("id-ID")}
+                      {full.ringkasan.variance > 0
+                        ? "-"
+                        : full.ringkasan.variance < 0
+                          ? "+"
+                          : ""}
+                      {Math.abs(full.ringkasan.variance).toLocaleString(
+                        "id-ID",
+                      )}
                     </strong>
                     <span>VARIANCE</span>
                   </button>
@@ -440,8 +468,12 @@ export default function KarawangDashboardPage() {
                     }}
                   >
                     {full.ringkasan.total_qty_scanned.toLocaleString("id-ID")} /{" "}
-                    {full.ringkasan.total_barcode.toLocaleString("id-ID")} pcs discan
-                    ({full.ringkasan.total_item} item, {full.ringkasan.total_collie_scanned.toLocaleString("id-ID")} collie discan)
+                    {full.ringkasan.total_barcode.toLocaleString("id-ID")} pcs
+                    discan ({full.ringkasan.total_item} item,{" "}
+                    {full.ringkasan.total_collie_scanned.toLocaleString(
+                      "id-ID",
+                    )}{" "}
+                    collie discan)
                   </div>
                   <div className="ko-progress-bar-outer">
                     <div

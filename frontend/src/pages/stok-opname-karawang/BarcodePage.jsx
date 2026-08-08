@@ -151,6 +151,8 @@ export default function KarawangBarcodePage() {
           [
             it.rak,
             it.barcode,
+            it.collie,
+            it.lokasi,
             it.item,
             it.deskripsi,
             it.transfer,
@@ -222,6 +224,8 @@ export default function KarawangBarcodePage() {
     const headers = [
       "Rak",
       "Barcode",
+      "Collie",
+      "Lokasi",
       "Item",
       "Deskripsi",
       "Transfer",
@@ -231,6 +235,8 @@ export default function KarawangBarcodePage() {
     const rows = filteredItems.map((it) => [
       it.rak,
       it.barcode,
+      it.collie,
+      it.lokasi,
       it.item,
       it.deskripsi,
       it.transfer,
@@ -478,6 +484,8 @@ export default function KarawangBarcodePage() {
                       <tr>
                         <th>Rak</th>
                         <th>Barcode</th>
+                        <th>Collie</th>
+                        <th>Lokasi (Lot)</th>
                         <th>Item</th>
                         <th>Deskripsi</th>
                         <th>Transfer</th>
@@ -488,7 +496,7 @@ export default function KarawangBarcodePage() {
                     <tbody>
                       {filteredItems.length === 0 && (
                         <tr>
-                          <td colSpan={7} className="ko-table-empty">
+                          <td colSpan={9} className="ko-table-empty">
                             Data tidak ditemukan.
                           </td>
                         </tr>
@@ -497,6 +505,8 @@ export default function KarawangBarcodePage() {
                         <tr key={`${it.barcode}-${it.item}-${index}`}>
                           <td className="ko-mono">{it.rak}</td>
                           <td className="ko-mono">{it.barcode}</td>
+                          <td className="ko-mono">{it.collie}</td>
+                          <td className="ko-mono">{it.lokasi}</td>
                           <td className="ko-strong">{it.item}</td>
                           <td>{it.deskripsi}</td>
                           <td className="ko-mono">{it.transfer}</td>

@@ -41,6 +41,7 @@ const KarawangCrossDockingModel = require("../../models/stok-opname-karawang/Kar
 const CrossDockingClient = require("../../services/crossDockingClient");
 const { getField } = require("../../utils/apiField");
 const { mapWithConcurrency } = require("../../utils/concurrency");
+const { enrichWithBcCollie } = require("../../utils/bcCollieEnrichment");
 const KarawangBatchModel = require("../../models/stok-opname-karawang/KarawangBatchModel");
 const response = require("../../utils/response");
 
@@ -126,9 +127,22 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
   barcodeLivePromise = (async () => {
     const rows = await CrossDockingClient.fetchDetailAll({ detail: true });
 
+    // Collie (bc_collie) gak ikut kebalikin di /stock-cd/detail-all, jadi
+    // di-"tempelin" belakangan lewat enrichWithBcCollie (sama pola yang
+    // dipake CrossDockingController buat export CSV) — TANPA batas maxPairs
+    // (null), soalnya halaman ini emang cuma nembak Cross Docking pas
+    // operator eksplisit klik "Refresh Data Cross Docking" (bukan tiap buka
+    // halaman), jadi wajar kalau agak lama. Beda dari bc_collie, lokasi
+    // (loccode) UDAH ikut kebalikin di /stock-cd/detail-all sendiri, jadi
+    // gak perlu enrichment tambahan buat itu.
+    const { rows: enrichedRows } = await enrichWithBcCollie(rows || [], {
+      maxPairs: null,
+      concurrency: 10,
+    });
+
     const itemSet = new Set();
     const barcodeSet = new Set();
-    const rawRows = (rows || [])
+    const rawRows = (enrichedRows || [])
       .map((row) => {
         const item = (getField(row, "item") || "").toString().trim();
         if (!item) return null;
@@ -140,10 +154,22 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
             ? String(barcodeRaw).trim()
             : "";
         if (barcode) barcodeSet.add(barcode);
+        const loccolRaw = getField(row, "loccode");
+        const lokasi =
+          loccolRaw !== undefined && loccolRaw !== null
+            ? String(loccolRaw).trim()
+            : "";
+        const collieRaw = getField(row, "bc_collie");
+        const collie =
+          collieRaw !== undefined && collieRaw !== null
+            ? String(collieRaw).trim()
+            : "";
         return {
           item,
           rackcode,
           barcode,
+          lokasi,
+          collie,
         };
       })
       .filter(Boolean);
@@ -152,7 +178,10 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
     try {
       descrMap = await KarawangEdpModel.descriptionsForItems([...itemSet]);
     } catch (err) {
-      console.error("getBarcodeLiveData: gagal ambil deskripsi dari db pandu:", err);
+      console.error(
+        "getBarcodeLiveData: gagal ambil deskripsi dari db pandu:",
+        err,
+      );
     }
 
     // "transfer": rackcode versi DB-PANDU EDP (bukan Cross Docking), dicari
@@ -163,7 +192,10 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
     try {
       edpRackMap = await KarawangEdpModel.rackDetailsByBarcode([...barcodeSet]);
     } catch (err) {
-      console.error("getBarcodeLiveData: gagal ambil rackcode dari db pandu:", err);
+      console.error(
+        "getBarcodeLiveData: gagal ambil rackcode dari db pandu:",
+        err,
+      );
     }
 
     const items = rawRows.map((r) => {
@@ -175,6 +207,8 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
       return {
         rak: r.rackcode || "-",
         barcode: r.barcode || "-",
+        collie: r.collie || "-",
+        lokasi: r.lokasi || "-",
         item: r.item,
         deskripsi: descrMap.get(r.item) || "-",
         transfer: transfer || "-",
@@ -729,7 +763,7 @@ class KarawangController {
           collie_scanned: s.collie_scanned,
           sisa_qty: t.qty_target - s.qty_scanned,
           persen: t.qty_target
-            ? Math.min(100, Math.round((s.qty_scanned / t.qty_target) * 100))
+            ? Math.min(100, Math.floor((s.qty_scanned / t.qty_target) * 100))
             : 0,
           // Operator + rak + lokasi yang scan item ini, digabung 1 baris.
           detail: detailByItem.get(t.item) || [],
@@ -752,7 +786,7 @@ class KarawangController {
           persen: total_qty_target
             ? Math.min(
                 100,
-                Math.round((totalScanned.total_qty / total_qty_target) * 100),
+                Math.floor((totalScanned.total_qty / total_qty_target) * 100),
               )
             : 0,
         },
@@ -792,7 +826,10 @@ class KarawangController {
       try {
         allStock = await getAllStock({ forceRefresh: wantRefresh });
       } catch (cdErr) {
-        console.error("KarawangController.dashboardFull gagal ambil Cross Docking:", cdErr);
+        console.error(
+          "KarawangController.dashboardFull gagal ambil Cross Docking:",
+          cdErr,
+        );
         // Kalau refresh gagal TAPI masih ada cache lama, tetep tampilin cache
         // lama (mendingan data agak basi daripada dashboard blank), sambil
         // kasih tau di response kalau refresh barusan gagal.
@@ -845,7 +882,7 @@ class KarawangController {
           collie_scanned: s.collie_scanned,
           sisa_qty: t.qty - s.qty_scanned,
           persen: t.qty
-            ? Math.min(100, Math.round((s.qty_scanned / t.qty) * 100))
+            ? Math.min(100, Math.floor((s.qty_scanned / t.qty) * 100))
             : 0,
           detail: detailByItem.get(t.item) || [],
         };
@@ -868,7 +905,7 @@ class KarawangController {
           persen: totalBarcode
             ? Math.min(
                 100,
-                Math.round((totalScanned.total_qty / totalBarcode) * 100),
+                Math.floor((totalScanned.total_qty / totalBarcode) * 100),
               )
             : 0,
         },

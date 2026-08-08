@@ -334,10 +334,8 @@ export default function KarawangScanPage() {
   // tombol ini murni navigasi: nutup rak & lokasi ini, balik ke step input
   // lokasi (karyawan tetap, gak perlu input ulang).
   const handleSelesai = () => {
-    toastSuccess("Sesi rak selesai, data tersimpan.");
+    toastSuccess("Rak selesai, lanjut scan rak berikutnya.");
     setCurrentRak(null);
-    setLoccol(null);
-    setLoccolInput("");
   };
 
   // Sama kaya tombol "Refresh Data Cross Docking" di Dashboard — narik
@@ -404,8 +402,8 @@ export default function KarawangScanPage() {
 
       {!loadingBatch && !batch && (
         <div className="ko-empty">
-          Gagal memuat sesi opname. Coba refresh halaman, atau hubungi IT
-          kalau terus gagal.
+          Gagal memuat sesi opname. Coba refresh halaman, atau hubungi IT kalau
+          terus gagal.
         </div>
       )}
 
