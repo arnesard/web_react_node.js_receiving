@@ -20,6 +20,7 @@ import {
   X,
   Trash2,
   Pencil,
+  Settings,
 } from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
@@ -181,6 +182,303 @@ function VarianceDetailModal({ items, onClose }) {
   );
 }
 
+// Modal setting cutoff karantina (tombol gear) — operator pilih tanggal +
+// jam manual. Begitu disimpan, cutoff-nya FIXED (gak ikut geser otomatis
+// tiap ganti hari lagi) sampai diubah manual lagi atau di-reset ke
+// otomatis. Input date & time dipisah 2 field HTML native (lebih gampang
+// dipakai di HP/tablet dibanding datetime-local yang UI-nya beda-beda per
+// browser).
+function KarantinaCutoffSettingModal({
+  currentCutoff,
+  isManual,
+  onClose,
+  onSaved,
+}) {
+  const initial = currentCutoff ? new Date(currentCutoff) : new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  // Ambil tanggal & jam APA ADANYA dalam WIB (bukan waktu lokal browser),
+  // biar konsisten sama cara backend nampilin & ngitung (semua WIB).
+  const wibParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  })
+    .formatToParts(initial)
+    .reduce((acc, p) => ({ ...acc, [p.type]: p.value }), {});
+
+  const [dateVal, setDateVal] = useState(
+    `${wibParts.year}-${wibParts.month}-${wibParts.day}`,
+  );
+  const [timeVal, setTimeVal] = useState(
+    `${wibParts.hour}:${wibParts.minute}`,
+  );
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!dateVal || !timeVal) {
+      Swal.fire({
+        icon: "warning",
+        title: "Tanggal & jam wajib diisi",
+      });
+      return;
+    }
+    setSaving(true);
+    try {
+      // Bikin instant absolut dari tanggal+jam yang dipilih, DIANGGAP WIB
+      // (+07:00) — bukan timezone browser operator, biar konsisten di HP
+      // mana pun cutoff-nya sama.
+      const iso = `${dateVal}T${timeVal}:00+07:00`;
+      const parsed = new Date(iso);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new Error("Format tanggal/jam gak valid");
+      }
+      const res = await api.put(
+        "/stok-opname-karawang/dashboard/karantina-cutoff",
+        { cutoff: iso },
+      );
+      onSaved(res.data.data);
+      Swal.fire({
+        icon: "success",
+        title: "Cutoff karantina disimpan",
+        timer: 1400,
+        showConfirmButton: false,
+      });
+      onClose();
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Gagal simpan cutoff",
+        text: err.response?.data?.message || err.message,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleResetOtomatis = async () => {
+    setSaving(true);
+    try {
+      const res = await api.delete(
+        "/stok-opname-karawang/dashboard/karantina-cutoff",
+      );
+      onSaved(res.data.data);
+      Swal.fire({
+        icon: "success",
+        title: "Balik ke cutoff otomatis",
+        text: "Cutoff bakal otomatis \"hari ini jam 12:00 WIB\", geser tiap ganti hari.",
+        timer: 2000,
+        showConfirmButton: false,
+      });
+      onClose();
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Gagal reset cutoff",
+        text: err.response?.data?.message || err.message,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="ko-cd-modal-backdrop" onClick={onClose}>
+      <div
+        className="ko-cd-modal"
+        style={{ maxWidth: 420 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="ko-cd-modal-header">
+          <h2>Atur Cutoff Barang Karantina</h2>
+          <button
+            type="button"
+            className="ko-cd-modal-close"
+            onClick={onClose}
+            aria-label="Tutup"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="ko-cd-modal-body">
+          <div
+            style={{ fontSize: 12, color: "#475569", marginBottom: 14 }}
+          >
+            Barang dengan tanggal update Cross Docking (WIB) mulai dari
+            tanggal &amp; jam di bawah ini dianggap "Barang Karantina" —
+            belum resmi masuk stok gudang, gak dihitung di Total Barcode /
+            Variance / Progress Scan.
+          </div>
+
+          <div style={{ marginBottom: 4, fontSize: 12, color: "#334155" }}>
+            Status saat ini:{" "}
+            <strong>
+              {isManual
+                ? "Diset manual (gak ikut geser otomatis)"
+                : "Otomatis (hari ini jam 12:00 WIB, geser tiap ganti hari)"}
+            </strong>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              marginTop: 14,
+              marginBottom: 4,
+            }}
+          >
+            <div style={{ flex: 1 }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 11,
+                  color: "#64748b",
+                  marginBottom: 4,
+                }}
+              >
+                Tanggal
+              </label>
+              <input
+                type="date"
+                className="ko-input"
+                value={dateVal}
+                onChange={(e) => setDateVal(e.target.value)}
+                style={{ width: "100%" }}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 11,
+                  color: "#64748b",
+                  marginBottom: 4,
+                }}
+              >
+                Jam (WIB)
+              </label>
+              <input
+                type="time"
+                className="ko-input"
+                value={timeVal}
+                onChange={(e) => setTimeVal(e.target.value)}
+                style={{ width: "100%" }}
+              />
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 8,
+              marginTop: 20,
+            }}
+          >
+            <button
+              type="button"
+              className="ko-btn-secondary"
+              onClick={handleResetOtomatis}
+              disabled={saving}
+              style={{ fontSize: 12 }}
+            >
+              Balik ke Otomatis
+            </button>
+            <button
+              type="button"
+              className="ko-btn-primary"
+              onClick={handleSave}
+              disabled={saving}
+              style={{ fontSize: 12 }}
+            >
+              {saving ? (
+                <Loader2 size={13} className="ko-spin" />
+              ) : (
+                "Simpan Cutoff"
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Modal karantina: item + deskripsi + qty yang last_update-nya kena cutoff
+// (hari ini jam 12:00 WIB ke atas) — dianggap barang baru masuk, BELUM
+// resmi jadi stok gudang yang wajib discan operator.
+function KarantinaDetailModal({ items, cutoff, onClose }) {
+  const sorted = [...items].sort((a, b) => b.qty - a.qty);
+  const totalQty = sorted.reduce((sum, it) => sum + it.qty, 0);
+  const cutoffLabel = cutoff ? formatFetchedAt(cutoff) : null;
+
+  return (
+    <div className="ko-cd-modal-backdrop" onClick={onClose}>
+      <div className="ko-cd-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="ko-cd-modal-header">
+          <h2>Barang Karantina ({sorted.length} item)</h2>
+          <button
+            type="button"
+            className="ko-cd-modal-close"
+            onClick={onClose}
+            aria-label="Tutup"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="ko-cd-modal-body">
+          {cutoffLabel && (
+            <div
+              style={{ fontSize: 12, color: "#475569", marginBottom: 10 }}
+            >
+              Barang dengan last update Cross Docking mulai{" "}
+              <strong>
+                {cutoffLabel.date} {cutoffLabel.time}
+              </strong>{" "}
+              dianggap belum resmi masuk stok gudang, tidak dihitung di Total
+              Barcode / Variance / Progress Scan.
+            </div>
+          )}
+          {sorted.length === 0 ? (
+            <div className="ko-empty">
+              Gak ada barang karantina saat ini.
+            </div>
+          ) : (
+            <div className="ko-cd-modal-table-scroll">
+              <table className="ko-data-table">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th>Deskripsi</th>
+                    <th>Qty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map((it) => (
+                    <tr key={it.item}>
+                      <td className="ko-strong">{it.item}</td>
+                      <td>{it.deskripsi}</td>
+                      <td className="ko-mono">{it.qty}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td className="ko-strong">Total</td>
+                    <td></td>
+                    <td className="ko-mono ko-strong">{totalQty}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Format tanggal jadi dd/mm/yy + jam terpisah, biar gampang dibedain mana
 // tanggal (bold, tegas) mana jam (lebih ringan/terang).
 function formatFetchedAt(iso) {
@@ -196,9 +494,13 @@ function formatFetchedAt(iso) {
   return { date: `${dd}/${mm}/${yy}`, time };
 }
 
-// 3 status warna item: putih (belum ada yang discan sama sekali), kuning
-// (lagi proses, sebagian udah kescan), hijau (selesai/qty udah sesuai target).
+// 4 status warna item: putih (belum ada yang discan sama sekali), kuning
+// (lagi proses, sebagian udah kescan), hijau (selesai/qty udah sesuai
+// target), merah pastel (overscan — qty yang kescan udah ngelewatin target
+// Cross Docking, kemungkinan ada barcode yang harusnya gak boleh kescan
+// di item ini, atau target-nya berubah/berkurang setelah sebagian discan).
 function getItemStatus(it) {
+  if (it.overscan) return "over";
   if (it.qty_scanned <= 0) return "empty";
   if (it.persen >= 100) return "done";
   return "progress";
@@ -217,6 +519,8 @@ export default function KarawangDashboardPage() {
 
   const [selectedItem, setSelectedItem] = useState(null); // buat modal detail item
   const [showVarianceModal, setShowVarianceModal] = useState(false);
+  const [showKarantinaModal, setShowKarantinaModal] = useState(false);
+  const [showCutoffSettingModal, setShowCutoffSettingModal] = useState(false);
 
   const loadFull = useCallback((batchId, refresh) => {
     if (refresh) setRefreshing(true);
@@ -358,6 +662,14 @@ export default function KarawangDashboardPage() {
                 <Trash2 size={13} />
                 Reset Data Scan
               </button>
+              <button
+                type="button"
+                className="ko-btn-secondary"
+                onClick={() => setShowCutoffSettingModal(true)}
+                title="Atur cutoff Barang Karantina"
+              >
+                <Settings size={13} />
+              </button>
             </div>
           )}
         </div>
@@ -386,7 +698,8 @@ export default function KarawangDashboardPage() {
             {refreshing && (
               <div className="ko-empty">
                 <Loader2 size={20} className="ko-spin" /> Menarik semua stok
-                dari Cross Docking... (bisa agak lama, mohon tunggu)
+                dari Cross Docking &amp; cek tanggal masuk tiap rak/item...
+                (bisa lebih lama dari biasanya, mohon tunggu)
               </div>
             )}
 
@@ -456,6 +769,26 @@ export default function KarawangDashboardPage() {
                     <strong>{full.ringkasan.persen}%</strong>
                     <span>PROGRESS SCAN</span>
                   </div>
+                  <button
+                    type="button"
+                    className="ko-summary-box ko-summary-box-clickable"
+                    onClick={() => setShowKarantinaModal(true)}
+                    title="Klik buat liat item barang karantina"
+                    style={{
+                      background:
+                        full.ringkasan.total_karantina_item > 0
+                          ? "linear-gradient(135deg, #b45309, #d97706)"
+                          : "linear-gradient(135deg, #475569, #64748b)",
+                    }}
+                  >
+                    <strong>
+                      {full.ringkasan.total_karantina_item}{" "}
+                      <span style={{ fontSize: 11, fontWeight: 600 }}>
+                        item
+                      </span>
+                    </strong>
+                    <span>BARANG KARANTINA</span>
+                  </button>
                 </div>
 
                 <div className="ko-card" style={{ padding: "10px 14px" }}>
@@ -510,7 +843,10 @@ export default function KarawangDashboardPage() {
                   >
                     <div
                       className="ko-radial"
-                      style={{ "--pct": it.persen, "--ring-color": "#7c3aed" }}
+                      style={{
+                        "--pct": it.persen,
+                        "--ring-color": status === "over" ? "#dc2626" : "#7c3aed",
+                      }}
                     >
                       <span className="ko-radial-label">{it.persen}%</span>
                     </div>
@@ -542,6 +878,59 @@ export default function KarawangDashboardPage() {
         <VarianceDetailModal
           items={full.items}
           onClose={() => setShowVarianceModal(false)}
+        />
+      )}
+      {showKarantinaModal && (
+        <KarantinaDetailModal
+          items={full?.karantina || []}
+          cutoff={full?.karantina_cutoff}
+          onClose={() => setShowKarantinaModal(false)}
+        />
+      )}
+      {showCutoffSettingModal && (
+        <KarantinaCutoffSettingModal
+          currentCutoff={full?.karantina_cutoff}
+          isManual={full?.karantina_cutoff_manual || false}
+          onClose={() => setShowCutoffSettingModal(false)}
+          onSaved={(saved) => {
+            // saved = { cutoff, is_manual, dashboard } dari backend —
+            // dashboard-nya hasil re-split data yang UDAH ke-cache pakai
+            // cutoff baru (gak nembak Cross Docking lagi), jadi tinggal
+            // gabungin ke state `full` yang ada biar UI langsung update.
+            setFull((prev) => {
+              if (!prev) return prev;
+              const next = {
+                ...prev,
+                karantina_cutoff: saved.cutoff,
+                karantina_cutoff_manual: saved.is_manual,
+              };
+              if (saved.dashboard) {
+                next.karantina = saved.dashboard.karantina || [];
+                next.items = saved.dashboard.items || prev.items;
+                next.ringkasan = {
+                  ...prev.ringkasan,
+                  total_item: saved.dashboard.total_item,
+                  total_barcode: saved.dashboard.total_barcode,
+                  total_karantina_item: saved.dashboard.total_karantina_item,
+                  total_karantina_qty: saved.dashboard.total_karantina_qty,
+                  variance:
+                    saved.dashboard.total_barcode -
+                    prev.ringkasan.total_qty_scanned,
+                  persen: saved.dashboard.total_barcode
+                    ? Math.min(
+                        100,
+                        Math.floor(
+                          (prev.ringkasan.total_qty_scanned /
+                            saved.dashboard.total_barcode) *
+                            100,
+                        ),
+                      )
+                    : 0,
+                };
+              }
+              return next;
+            });
+          }}
         />
       )}
     </div>

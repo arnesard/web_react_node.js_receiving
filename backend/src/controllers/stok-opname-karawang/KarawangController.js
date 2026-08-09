@@ -44,6 +44,12 @@ const { mapWithConcurrency } = require("../../utils/concurrency");
 const { enrichWithBcCollie } = require("../../utils/bcCollieEnrichment");
 const KarawangBatchModel = require("../../models/stok-opname-karawang/KarawangBatchModel");
 const response = require("../../utils/response");
+const {
+  getKarantinaCutoff,
+  isKarantinaCutoffManual,
+  setKarantinaCutoff,
+  clearKarantinaCutoff,
+} = require("../../utils/karantinaCutoffStore");
 
 // Belum ada auth/JWT di project ini (lihat catatan sama di modul lain).
 function currentUserId(req) {
@@ -110,6 +116,14 @@ const TRUNCATE_SCAN_PASSWORD = "devbpw";
 // jam), itu trade-off yang sengaja dipilih demi gak ngebom server sumber.
 let allStockCache = null; // { data, fetchedAt } — cuma 1 entry, gak per-batch
 let allStockPromise = null; // biar request bareng-bareng numpang 1 query aja
+// Layer MENTAH (network+db) di-cache TERPISAH dari allStockCache di atas —
+// allStockCache itu hasil OLAHAN (udah displit stok normal vs karantina
+// pakai cutoff tertentu), sedangkan rawStockCache nyimpen rows Cross
+// Docking + hasil enrichment lastupdated + deskripsi item APA ADANYA
+// (belum peduli cutoff). Dipisah supaya kalau operator ganti cutoff lewat
+// tombol gear, dashboard bisa langsung kehitung ulang PAKAI DATA YANG SAMA
+// (murah, cuma loop JS) TANPA perlu nembak ulang Cross Docking (mahal).
+let rawStockCache = null; // { rows, lastUpdatedByBarcode, descrMap, fetched_at }
 
 // Cache row-level buat Halaman Barcode versi live Cross Docking (barcode,
 // rackcode, item per baris — beda dari allStockCache yang cuma nyimpen
@@ -311,65 +325,102 @@ async function getLiveTarget(batchId) {
 // buat ditampilin, cuma bikin payload gede tanpa guna (lihat juga
 // dashboardFull: yang ditampilin di UI level item cuma qty, bukan daftar
 // barcode-nya satu-satu).
+// Detail All bulk (/stock-cd/detail-all) TERBUKTI gak ikut ngebalikin field
+// lastupdated (dicek langsung 08/08/2026 — cuma ada rackcode, barcode,
+// whsweek, curweek, probcode, item, jdge, txtnote, loccode, hold_reasonX).
+// lastupdated CUMA ada di endpoint detail per rackcode+item
+// (/stock-cd/detail, sama endpoint yang dipake enrichWithBcCollie buat
+// bc_collie) — jadi caranya SAMA: kumpulin pasangan rackcode+item unik,
+// query /stock-cd/detail buat tiap pasangan (dibatasi concurrency), lalu
+// cocokin balik ke tiap baris Detail All lewat barcode. Dipisah dari
+// enrichWithBcCollie (bukan digabung) karena beda kebutuhan: ini dipakai
+// buat SEMUA stok se-DC (getAllStock, unscoped), sedangkan bc_collie cuma
+// dibutuhin pas export CSV / halaman Barcode.
+async function getLastUpdatedMap(rows, { concurrency = 10 } = {}) {
+  const pairs = new Map(); // "rackcode||item" -> { rackcode, item }
+  (rows || []).forEach((row) => {
+    const rackcode = getField(row, "rackcode");
+    const item = getField(row, "item");
+    if (rackcode && item) {
+      pairs.set(`${rackcode}||${item}`, { rackcode, item });
+    }
+  });
+  const uniquePairs = Array.from(pairs.values());
+  const barcodeToLastUpdated = new Map();
+  if (!uniquePairs.length) return barcodeToLastUpdated;
+
+  let failedPairs = 0;
+  await mapWithConcurrency(uniquePairs, concurrency, async (pair) => {
+    let detailRows;
+    try {
+      detailRows = await CrossDockingClient.fetchDetail(
+        pair.rackcode,
+        pair.item,
+      );
+    } catch (err) {
+      failedPairs += 1;
+      console.error(
+        `getLastUpdatedMap: gagal ambil detail ${pair.rackcode}/${pair.item}:`,
+        err,
+      );
+      return;
+    }
+    (detailRows || []).forEach((detailRow) => {
+      const barcodeRaw = getField(detailRow, "barcode");
+      const lastupdated = getField(detailRow, "lastupdated");
+      if (barcodeRaw !== undefined) {
+        barcodeToLastUpdated.set(String(barcodeRaw).trim(), lastupdated);
+      }
+    });
+  });
+
+  if (failedPairs > 0) {
+    console.warn(
+      `getLastUpdatedMap: ${failedPairs} dari ${uniquePairs.length} pasangan rackcode+item gagal diambil (barisnya tetap dianggap stok normal, bukan karantina, karena lastupdated-nya gak kebaca).`,
+    );
+  }
+
+  return barcodeToLastUpdated;
+}
+
 async function getAllStock({ forceRefresh = false } = {}) {
-  if (!forceRefresh && allStockCache) return allStockCache.data;
+  if (!forceRefresh && rawStockCache) {
+    return computeAllStockData(rawStockCache, getKarantinaCutoff());
+  }
   if (allStockPromise) return allStockPromise;
 
   allStockPromise = (async () => {
     const rows = await CrossDockingClient.fetchDetailAll({ detail: true });
 
-    // item -> { qty, barcodeSet } — barcodeSet cuma dipakai buat ngitung
-    // total_barcode unik (kartu ringkasan), gak ikut dibalikin per-item.
-    const perItem = new Map();
-    let totalBarcodeSet = new Set();
-    // Set semua loccode unik yang ada di data ini — dipakai buat validasi
-    // lokasi di step Scan (KarawangController.validasiLokasi) TANPA perlu
-    // nembak Cross Docking terpisah tiap operator input lokasi.
-    const locationSet = new Set();
+    // Nembak /stock-cd/detail per pasangan rackcode+item unik buat narik
+    // lastupdated (lihat komentar getLastUpdatedMap di atas) — ini yang
+    // bikin "Refresh Data Cross Docking" makin lama dari sebelumnya,
+    // tapi emang cuma jalan pas operator eksplisit klik Refresh, sama
+    // kayak enrichment bc_collie di Halaman Barcode.
+    const lastUpdatedByBarcode = await getLastUpdatedMap(rows);
+
+    const allItemsForDescr = new Set();
     (rows || []).forEach((row) => {
       const item = (getField(row, "item") || "").toString().trim();
-      if (!item) return;
-      const barcodeRaw = getField(row, "barcode");
-      const barcode =
-        barcodeRaw !== undefined && barcodeRaw !== null
-          ? String(barcodeRaw).trim()
-          : "";
-      if (!perItem.has(item)) {
-        perItem.set(item, { qty: 0 });
-      }
-      perItem.get(item).qty += 1;
-      if (barcode) totalBarcodeSet.add(barcode);
-      const loc = (getField(row, "loccode") || "").toString().trim();
-      if (loc) locationSet.add(loc.toUpperCase());
+      if (item) allItemsForDescr.add(item);
     });
-
-    const items = [...perItem.keys()];
     let descrMap = new Map();
     try {
-      descrMap = await KarawangEdpModel.descriptionsForItems(items);
+      descrMap = await KarawangEdpModel.descriptionsForItems([
+        ...allItemsForDescr,
+      ]);
     } catch (err) {
       console.error("getAllStock: gagal ambil deskripsi dari db pandu:", err);
     }
 
-    const list = items
-      .map((item) => ({
-        item,
-        deskripsi: descrMap.get(item) || "-",
-        qty: perItem.get(item).qty,
-      }))
-      .sort((a, b) => a.item.localeCompare(b.item));
-
-    const data = {
-      items: list,
-      total_item: list.length,
-      total_qty: list.reduce((sum, t) => sum + t.qty, 0),
-      total_barcode: totalBarcodeSet.size,
-      locations: [...locationSet],
+    rawStockCache = {
+      rows,
+      lastUpdatedByBarcode,
+      descrMap,
       fetched_at: new Date().toISOString(),
     };
-    allStockCache = { data };
-    totalBarcodeSet = null; // gak dipakai lagi, biar di-GC
-    return data;
+
+    return computeAllStockData(rawStockCache, getKarantinaCutoff());
   })();
 
   try {
@@ -377,6 +428,98 @@ async function getAllStock({ forceRefresh = false } = {}) {
   } finally {
     allStockPromise = null;
   }
+}
+
+// Bagian MURAH (tanpa network/db call) — ambil data mentah yang udah
+// di-cache (rawStockCache) lalu displit jadi stok normal vs karantina
+// berdasarkan `cutoff` yang dikasih. Dipanggil ulang tiap ganti cutoff
+// (lewat tombol gear) TANPA perlu fetch ulang ke Cross Docking.
+function computeAllStockData(raw, cutoff) {
+  const { rows, lastUpdatedByBarcode, descrMap } = raw;
+
+  // item -> { qty } — dipisah 2 map: stok normal (perItem) vs yang kena
+  // cutoff (karantinaPerItem). barcodeSet cuma dipakai buat ngitung
+  // total_barcode unik (kartu ringkasan), gak ikut dibalikin per-item.
+  const perItem = new Map();
+  const karantinaPerItem = new Map();
+  const totalBarcodeSet = new Set();
+  // Set semua loccode unik yang ada di data ini — dipakai buat validasi
+  // lokasi di step Scan (KarawangController.validasiLokasi) TANPA perlu
+  // nembak Cross Docking terpisah tiap operator input lokasi. Tetap
+  // diisi dari SEMUA baris (termasuk yang karantina), soalnya ini cuma
+  // dipakai buat cek lokasi valid/enggak, bukan buat hitungan stok.
+  const locationSet = new Set();
+  let skippedNoLastUpdate = 0;
+  (rows || []).forEach((row) => {
+    const item = (getField(row, "item") || "").toString().trim();
+    if (!item) return;
+    const barcodeRaw = getField(row, "barcode");
+    const barcode =
+      barcodeRaw !== undefined && barcodeRaw !== null
+        ? String(barcodeRaw).trim()
+        : "";
+    const loc = (getField(row, "loccode") || "").toString().trim();
+    if (loc) locationSet.add(loc.toUpperCase());
+
+    // lastupdated TERBUKTI gak ikut kebalikin di /stock-cd/detail-all
+    // (dicek langsung 08/08/2026), jadi diambil dari lastUpdatedByBarcode
+    // (hasil enrichment getLastUpdatedMap) lewat barcode baris ini. Kalau
+    // barcode-nya gak ketemu di map / gagal diparse sebagai tanggal
+    // valid, aman di-treat sebagai stok normal (bukan karantina) — jangan
+    // sampai baris yang seharusnya kehitung stok malah "ilang" gara-gara
+    // enrichment gagal buat pasangan rackcode+item itu.
+    const lastUpdateRaw = barcode
+      ? lastUpdatedByBarcode.get(barcode)
+      : undefined;
+    const lastUpdate = lastUpdateRaw ? new Date(lastUpdateRaw) : null;
+    const isValidDate = lastUpdate && !Number.isNaN(lastUpdate.getTime());
+    if (lastUpdateRaw && !isValidDate) skippedNoLastUpdate += 1;
+    const isKarantina =
+      isValidDate && lastUpdate.getTime() >= cutoff.getTime();
+
+    const targetMap = isKarantina ? karantinaPerItem : perItem;
+    if (!targetMap.has(item)) targetMap.set(item, { qty: 0 });
+    targetMap.get(item).qty += 1;
+    if (!isKarantina && barcode) totalBarcodeSet.add(barcode);
+  });
+
+  if (skippedNoLastUpdate > 0) {
+    console.warn(
+      `computeAllStockData: ${skippedNoLastUpdate} baris punya lastupdated tapi gagal diparse jadi tanggal (dianggap stok normal, bukan karantina). Cek format field lastupdated dari Cross Docking.`,
+    );
+  }
+
+  const list = [...perItem.keys()]
+    .map((item) => ({
+      item,
+      deskripsi: descrMap.get(item) || "-",
+      qty: perItem.get(item).qty,
+    }))
+    .sort((a, b) => a.item.localeCompare(b.item));
+
+  const karantina = [...karantinaPerItem.keys()]
+    .map((item) => ({
+      item,
+      deskripsi: descrMap.get(item) || "-",
+      qty: karantinaPerItem.get(item).qty,
+    }))
+    .sort((a, b) => a.item.localeCompare(b.item));
+
+  const data = {
+    items: list,
+    total_item: list.length,
+    total_qty: list.reduce((sum, t) => sum + t.qty, 0),
+    total_barcode: totalBarcodeSet.size,
+    locations: [...locationSet],
+    karantina,
+    total_karantina_item: karantina.length,
+    total_karantina_qty: karantina.reduce((sum, t) => sum + t.qty, 0),
+    karantina_cutoff: cutoff.toISOString(),
+    karantina_cutoff_manual: isKarantinaCutoffManual(),
+    fetched_at: raw.fetched_at,
+  };
+  allStockCache = { data };
+  return data;
 }
 
 class KarawangController {
@@ -610,6 +753,26 @@ class KarawangController {
         );
       }
 
+      // Tolak scan kalau barangnya lagi status KARANTINA (lastupdated
+      // Cross Docking >= cutoff yang lagi aktif, manual atau otomatis —
+      // lihat karantinaCutoffStore & gear icon di Dashboard). Barang yang
+      // baru masuk (in bound) belum resmi jadi stok gudang, jadi belum
+      // boleh discan dulu sampai lewat cutoff / operator ubah cutoff-nya.
+      if (verifCd.lastupdated) {
+        const lu = new Date(verifCd.lastupdated);
+        if (!Number.isNaN(lu.getTime())) {
+          const cutoff = getKarantinaCutoff();
+          if (lu.getTime() >= cutoff.getTime()) {
+            return res.status(422).json({
+              status: "error",
+              message: `❌ Barang ini IN BOUND (cut off) — masuk KARANTINA, belum bisa discan.`,
+              data: null,
+              karantina: true,
+            });
+          }
+        }
+      }
+
       // Deskripsi item tetap dari db pandu (bcmcfgv1.itemcatalog) — Cross
       // Docking gak nyediain deskripsi. Non-fatal kalau gagal: tetap
       // lanjut simpan collie-nya, deskripsi cuma tampil "-".
@@ -765,6 +928,9 @@ class KarawangController {
           persen: t.qty_target
             ? Math.min(100, Math.floor((s.qty_scanned / t.qty_target) * 100))
             : 0,
+          overscan: t.qty_target
+            ? s.qty_scanned > t.qty_target
+            : s.qty_scanned > 0,
           // Operator + rak + lokasi yang scan item ini, digabung 1 baris.
           detail: detailByItem.get(t.item) || [],
         };
@@ -884,6 +1050,13 @@ class KarawangController {
           persen: t.qty
             ? Math.min(100, Math.floor((s.qty_scanned / t.qty) * 100))
             : 0,
+          // Overscan: qty yang kescan udah ngelewatin target Cross Docking
+          // buat item ini (lihat diskusi soal scanCollie yang gak ngeblock
+          // qty berlebih, cuma ngeblock collie duplikat) — dipakai frontend
+          // buat nge-highlight card item ini warna merah pastel, beda dari
+          // "done" (hijau, pas-pasan) biar operator/supervisor langsung
+          // notice ada anomali di item ini.
+          overscan: t.qty ? s.qty_scanned > t.qty : s.qty_scanned > 0,
           detail: detailByItem.get(t.item) || [],
         };
       });
@@ -896,6 +1069,9 @@ class KarawangController {
         has_data: true,
         fetched_at: allStock.fetched_at,
         items,
+        karantina: allStock.karantina || [],
+        karantina_cutoff: allStock.karantina_cutoff || null,
+        karantina_cutoff_manual: allStock.karantina_cutoff_manual || false,
         ringkasan: {
           total_item: allStock.total_item,
           total_barcode: totalBarcode,
@@ -908,6 +1084,8 @@ class KarawangController {
                 Math.floor((totalScanned.total_qty / totalBarcode) * 100),
               )
             : 0,
+          total_karantina_item: allStock.total_karantina_item || 0,
+          total_karantina_qty: allStock.total_karantina_qty || 0,
         },
       });
     } catch (err) {
@@ -1008,6 +1186,79 @@ class KarawangController {
       return response.success(res, { batch, has_data: true, ...data });
     } catch (err) {
       console.error("KarawangController.barcodeDetailsLive gagal:", err);
+      return response.error(res, err.message);
+    }
+  }
+
+  // ── Setting cutoff "Barang Karantina" (tombol gear di Dashboard) ──
+  // GET: baca cutoff yang lagi aktif (manual kalau udah di-set, atau
+  // otomatis "hari ini jam 12:00 WIB" kalau belum pernah di-set).
+  async getKarantinaCutoffSetting(req, res) {
+    try {
+      const cutoff = getKarantinaCutoff();
+      return response.success(res, {
+        cutoff: cutoff.toISOString(),
+        is_manual: isKarantinaCutoffManual(),
+      });
+    } catch (err) {
+      console.error(
+        "KarawangController.getKarantinaCutoffSetting gagal:",
+        err,
+      );
+      return response.error(res, err.message);
+    }
+  }
+
+  // PUT body: { cutoff: "2026-08-09T14:00:00+07:00" } (atau format lain
+  // yang bisa dibaca `new Date(...)`) — begitu di-set, dashboard LANGSUNG
+  // kehitung ulang pakai cutoff baru ini tanpa perlu nembak Cross Docking
+  // lagi (lihat computeAllStockData / getAllStock di atas), soalnya cuma
+  // ganti cara nge-split data yang UDAH ke-cache, bukan re-fetch.
+  async setKarantinaCutoffSetting(req, res) {
+    try {
+      const { cutoff } = req.body || {};
+      if (!cutoff) {
+        return response.error(res, "Field cutoff wajib diisi", 400);
+      }
+      const saved = setKarantinaCutoff(cutoff);
+      // rawStockCache di-reuse (gak perlu fetch ulang) — cukup panggil
+      // getAllStock TANPA forceRefresh biar allStockCache ke-refresh pakai
+      // cutoff baru dari data yang udah ada.
+      const data = rawStockCache
+        ? computeAllStockData(rawStockCache, saved)
+        : null;
+      return response.success(res, {
+        cutoff: saved.toISOString(),
+        is_manual: true,
+        dashboard: data,
+      });
+    } catch (err) {
+      console.error(
+        "KarawangController.setKarantinaCutoffSetting gagal:",
+        err,
+      );
+      return response.error(res, err.message || "Gagal simpan cutoff", 400);
+    }
+  }
+
+  // Balikin ke perilaku otomatis (hari ini jam 12:00 WIB, geser tiap hari).
+  async resetKarantinaCutoffSetting(req, res) {
+    try {
+      clearKarantinaCutoff();
+      const cutoff = getKarantinaCutoff();
+      const data = rawStockCache
+        ? computeAllStockData(rawStockCache, cutoff)
+        : null;
+      return response.success(res, {
+        cutoff: cutoff.toISOString(),
+        is_manual: false,
+        dashboard: data,
+      });
+    } catch (err) {
+      console.error(
+        "KarawangController.resetKarantinaCutoffSetting gagal:",
+        err,
+      );
       return response.error(res, err.message);
     }
   }

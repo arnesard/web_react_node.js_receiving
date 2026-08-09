@@ -97,8 +97,14 @@ class KarawangCrossDockingModel {
       .trim();
     const kategori = probcodeRaw ? probcodeRaw.toUpperCase() : "OK";
     const qty = matches.length;
+    // lastupdated dari baris yang cocok — dipakai KarawangController.scanCollie
+    // buat nge-tolak scan collie yang barangnya lagi status karantina (lihat
+    // cutoff di karantinaCutoffStore). Diambil dari sini (bukan enrichment
+    // tambahan) karena matches[0] udah hasil query /stock-cd/detail yang
+    // emang ngebalikin field ini.
+    const lastupdated = getField(matches[0], "lastupdated");
 
-    return { item, qty, kategori };
+    return { item, qty, kategori, lastupdated };
   }
 }
 

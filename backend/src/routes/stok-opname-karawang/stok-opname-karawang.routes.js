@@ -17,6 +17,21 @@ router.get("/dashboard", KarawangController.dashboard);
 // "Refresh Data Cross Docking" di UI), lihat catatan di
 // KarawangController.dashboardFull.
 router.get("/dashboard/full", KarawangController.dashboardFull);
+// Setting cutoff "Barang Karantina" (tombol gear di Dashboard) — GET buat
+// baca nilai aktif, PUT buat set manual, DELETE buat balik ke otomatis
+// (hari ini jam 12:00 WIB, geser tiap hari).
+router.get(
+  "/dashboard/karantina-cutoff",
+  KarawangController.getKarantinaCutoffSetting,
+);
+router.put(
+  "/dashboard/karantina-cutoff",
+  KarawangController.setKarantinaCutoffSetting,
+);
+router.delete(
+  "/dashboard/karantina-cutoff",
+  KarawangController.resetKarantinaCutoffSetting,
+);
 router.get("/barcode-details", KarawangController.barcodeDetails);
 // Versi live: langsung dari Cross Docking (per baris/barcode), query berat
 // cuma jalan kalau ?refresh=true — sama pola caching-nya kayak dashboard/full.

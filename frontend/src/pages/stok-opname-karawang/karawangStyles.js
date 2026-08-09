@@ -121,6 +121,9 @@ export const karawangStyles = `
     display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
   .ko-btn-secondary:hover { background: #f1f5f9; }
   .ko-btn-secondary:disabled { opacity: 0.55; cursor: not-allowed; }
+  .ko-input { border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 10px; font-size: 13px;
+    font-family: inherit; color: #0f172a; background: #fff; }
+  .ko-input:focus { outline: none; border-color: #0021b3; box-shadow: 0 0 0 2px rgba(0,33,179,0.15); }
   .ko-btn-download { background: #16a34a; border-color: #16a34a; color: #fff; white-space: nowrap; }
   .ko-btn-download:hover { background: #15803d; border-color: #15803d; }
   .ko-spin { animation: ko-spin 0.8s linear infinite; }
@@ -129,7 +132,7 @@ export const karawangStyles = `
   .ko-text-input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #cbd5e1;
     font-size: 14px; box-sizing: border-box; margin-bottom: 12px; }
 
-  .ko-summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+  .ko-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 14px; }
   .ko-summary-box { background: linear-gradient(135deg, #0021b3, #0038f0); border-radius: 14px;
     padding: 12px; color: #fff; text-align: center; }
   .ko-summary-box strong { display: block; font-size: 17px; font-weight: 800; }
@@ -155,6 +158,9 @@ export const karawangStyles = `
   .ko-item-card-progress .ko-item-code { color: #92400e; }
   .ko-item-card-done { background: #f0fdf4; border-color: #4ade80; }
   .ko-item-card-done .ko-item-code { color: #166534; }
+  .ko-item-card-over { background: #fef2f2; border-color: #fca5a5; }
+  .ko-item-card-over .ko-item-code { color: #b91c1c; }
+  .ko-item-card-over .ko-item-qty { color: #b91c1c; font-weight: 700; }
 
   /* Summary box variance dibikin bisa diklik buat liat rincian item yang
      belum kescan lengkap. */

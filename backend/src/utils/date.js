@@ -45,9 +45,23 @@ function currentHourJakarta() {
   );
 }
 
+/**
+ * Titik cutoff "hari ini jam 12:00 WIB" sebagai Date (instant absolut,
+ * gak peduli timezone OS server) — dipakai buat nentuin barang yang
+ * last_update-nya sesudah jam segini hari ini dianggap "Barang Karantina"
+ * (belum resmi masuk stok gudang), bukan bagian dari target stok yang wajib
+ * discan operator. Cutoff-nya SELALU jam 12:00 di HARI INI (WIB), bukan
+ * rolling 24 jam — jadi tiap ganti hari, cutoff-nya otomatis ikut geser ke
+ * tanggal baru jam 12:00 WIB juga.
+ */
+function quarantineCutoffToday() {
+  return new Date(`${todayJakarta()}T12:00:00+07:00`);
+}
+
 module.exports = {
   toJakartaDateString,
   todayJakarta,
   addDaysJakarta,
   currentHourJakarta,
+  quarantineCutoffToday,
 };
