@@ -146,9 +146,19 @@ class ControlStockModel {
   // ribuan rak fisik), jadi query yang gak perlu narik data item lain
   // penting biar gak nambah beban ke DB EDP yang udah dipanggil beberapa
   // kali di alur ini.
-  static async _getRakBelumMasukLot(rackcodes, itemCode, kategoriFilter = null) {
+  static async _getRakBelumMasukLot(
+    rackcodes,
+    itemCode,
+    kategoriFilter = null,
+  ) {
     if (!rackcodes.length) {
-      return { ada: false, jumlah_rak: 0, qty_total: 0, kategori_breakdown: [], racks: [] };
+      return {
+        ada: false,
+        jumlah_rak: 0,
+        qty_total: 0,
+        kategori_breakdown: [],
+        racks: [],
+      };
     }
     const kode = (itemCode || "").trim();
 
@@ -196,7 +206,13 @@ class ControlStockModel {
         if (b.qty !== a.qty) return b.qty - a.qty;
         return a.curweek.localeCompare(b.curweek);
       })[0].curweek;
-      return { rackcode: rc, qty, kategori: kategoriList.join(", "), kategoriList, curweek };
+      return {
+        rackcode: rc,
+        qty,
+        kategori: kategoriList.join(", "),
+        kategoriList,
+        curweek,
+      };
     });
 
     if (kategoriFilter) {
@@ -280,24 +296,51 @@ class ControlStockModel {
   }
 
   // Autocomplete pencarian kode item (dipakai di kotak search halaman
-  // Control Stock). Cari dari fgloc.item yang lagi ada lokasinya (bukan
-  // dari master item, biar hasil pencarian relevan — item yang gak punya
-  // stok di lokasi manapun gak usah muncul).
+  // Control Stock). Dua jalur digabung:
+  //   A) fgloc.item diawali keyword (prefix match, index-friendly) — buat
+  //      user yang ngetik kode item langsung, mis. "IBD1301" atau "MB67".
+  //   B) itemcatalog.descr NGANDUNG keyword — buat user yang ngetik
+  //      sebagian deskripsi, mis. ukuran "130" atau kode pattern "SCT001"
+  //      (tanpa strip) buat nemuin deskripsi "130/70-13 SCT-001". Keyword
+  //      DAN deskripsi sama-sama dibuang strip/spasinya + di-uppercase
+  //      dulu sebelum dibandingin, biar "sct001" bisa ketemu "SCT-001".
+  // Kedua jalur cuma balikin item yang emang ada lokasinya di fgloc (item
+  // yang gak punya stok di lokasi manapun gak usah muncul di suggestion).
   static async searchItem(keyword, limit = 20) {
+    const raw = (keyword || "").trim();
+    if (!raw) return [];
+
     // Prefix match ("KODE%"), BUKAN "%KODE%" — leading wildcard bikin index
     // di kolom item gak kepake (full scan). Prefix match masih bisa pakai
     // index `key3 (item, whscode)` yang udah ada di tabel fgloc, jadi tetap
     // cepat walau tabelnya 100rb+ baris.
-    const kw = `${(keyword || "").trim()}%`;
-    const [rows] = await poolEdp.query(
+    const kwPrefix = `${raw}%`;
+    const [itemRows] = await poolEdp.query(
       `SELECT DISTINCT item
        FROM fgloc
-       WHERE item LIKE ? AND item <> ''
-       ORDER BY item
-       LIMIT ?`,
-      [kw, limit],
+       WHERE item LIKE ? AND item <> ''`,
+      [kwPrefix],
     );
-    const items = rows.map((r) => (r.item || "").trim()).filter(Boolean);
+
+    const kwNormalized = raw.replace(/[\s-]/g, "").toUpperCase();
+    let descrRows = [];
+    if (kwNormalized) {
+      const [rows2] = await poolEdp.query(
+        `SELECT DISTINCT item FROM bcmcfgv1.itemcatalog
+         WHERE REPLACE(REPLACE(UPPER(descr), '-', ''), ' ', '') LIKE ?
+           AND item IN (SELECT DISTINCT item FROM fgloc WHERE item <> '')`,
+        [`%${kwNormalized}%`],
+      );
+      descrRows = rows2;
+    }
+
+    const itemSet = new Set();
+    [...itemRows, ...descrRows].forEach((r) => {
+      const it = (r.item || "").trim();
+      if (it) itemSet.add(it);
+    });
+
+    const items = [...itemSet].sort().slice(0, limit);
     const descrMap = await this._getDescriptions(items);
     return items.map((item) => ({
       item,
@@ -346,9 +389,15 @@ class ControlStockModel {
       `SELECT DISTINCT rackcode FROM rack WHERE item = ? AND rackcode <> ''`,
       [kode],
     );
+    // Rackcode "virtual" (bukan rak fisik gudang — lihat isRackcodeVirtual
+    // di bawah) dibuang dari sini juga, biar gak ikut nambahin item ke
+    // query IN (?) OR (?) OR (?) OR (?) ke fgloc di bawah maupun ke
+    // hitungan "belum masuk lot" nanti.
+    const isRackcodeVirtual = (rc) =>
+      rc === "CUSTOMER" || rc === "COLLIE" || /^~?T-\d+$/i.test(rc);
     const rackcodesFisik = rackHits
       .map((r) => (r.rackcode || "").trim())
-      .filter(Boolean);
+      .filter((rc) => rc && !isRackcodeVirtual(rc));
 
     let driftRows = [];
     if (rackcodesFisik.length) {
@@ -375,6 +424,8 @@ class ControlStockModel {
         if (trimmed) matchedRackcodeSet.add(trimmed);
       });
     });
+    // (rackcodesFisik di atas udah dibuang duluan dari kode virtual kayak
+    // "CUSTOMER"/"T-<angka>", jadi filter di sini cukup soal matched/'~')
     const rackcodesBelumMasukLot = rackcodesFisik.filter(
       (rc) => rc !== "~" && !matchedRackcodeSet.has(rc),
     );
@@ -433,12 +484,13 @@ class ControlStockModel {
       });
     });
 
-    const [rackMap, descrMap, belumMasukLot, rakBelumMasukLot] = await Promise.all([
-      this._getRackContents([...allRackcodes]),
-      this._getDescriptions([kode]),
-      this._getBelumMasukLot(kode, filterKategori),
-      this._getRakBelumMasukLot(rackcodesBelumMasukLot, kode, filterKategori),
-    ]);
+    const [rackMap, descrMap, belumMasukLot, rakBelumMasukLot] =
+      await Promise.all([
+        this._getRackContents([...allRackcodes]),
+        this._getDescriptions([kode]),
+        this._getBelumMasukLot(kode, filterKategori),
+        this._getRakBelumMasukLot(rackcodesBelumMasukLot, kode, filterKategori),
+      ]);
 
     const deskripsi = descrMap.get(kode) || "-";
 
@@ -518,7 +570,6 @@ class ControlStockModel {
         allRacks,
       };
     });
-
 
     // Tahap 2: gabung berdasarkan loccol (lot) — lot yang sama disatuin
     // jadi 1 lokasi, rak & minggunya digabung semua di 1 tempat.

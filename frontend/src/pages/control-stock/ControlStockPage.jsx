@@ -3,6 +3,7 @@
 // KODE ITEM, hasilnya semua LOKASI (lot) tempat item itu berada, lengkap
 // jumlah rak & qty per lokasi, diurut dari whsweek paling tua.
 import { useState, useEffect, useRef, useCallback } from "react";
+import { Link } from "react-router-dom";
 import Swal from "sweetalert2";
 import {
   Search,
@@ -12,6 +13,7 @@ import {
   Loader2,
   ChevronDown,
   ChevronRight,
+  Home,
 } from "lucide-react";
 import api from "../../api/axiosInstance";
 
@@ -124,6 +126,12 @@ export default function ControlStock() {
     <div className="cs-page">
       <style>{csStyles}</style>
 
+      <div className="cs-home-bar">
+        <Link to="/" className="cs-home-btn" title="Kembali ke Pilih Menu">
+          <Home size={17} />
+        </Link>
+      </div>
+
       <div className="cs-header">
         <h1>Cek Lokasi Stock per Item</h1>
       </div>
@@ -205,25 +213,16 @@ export default function ControlStock() {
             </div>
             <div className="cs-summary-grid">
               <div className="cs-summary-box">
-                <MapPin size={16} />
-                <div>
-                  <strong>{result.summary.total_lokasi}</strong>
-                  <span>Lokasi</span>
-                </div>
+                <strong>{result.summary.total_lokasi}</strong>
+                <span>Lokasi</span>
               </div>
               <div className="cs-summary-box">
-                <Layers size={16} />
-                <div>
-                  <strong>{result.summary.total_rak}</strong>
-                  <span>Rak</span>
-                </div>
+                <strong>{result.summary.total_rak}</strong>
+                <span>Rak</span>
               </div>
               <div className="cs-summary-box">
-                <Boxes size={16} />
-                <div>
-                  <strong>{result.summary.total_qty}</strong>
-                  <span>Qty</span>
-                </div>
+                <strong>{result.summary.total_qty}</strong>
+                <span>Qty</span>
               </div>
             </div>
           </div>
@@ -268,7 +267,10 @@ export default function ControlStock() {
               {showBelumMasukLot && (
                 <div className="cs-rack-detail-list cs-bml-detail-list">
                   {result.belum_masuk_lot.detail.map((d, i) => (
-                    <div key={i} className="cs-rack-detail-row cs-rack-chip-warn">
+                    <div
+                      key={i}
+                      className="cs-rack-detail-row cs-rack-chip-warn"
+                    >
                       <span className="cs-week-badge">
                         {formatWhsWeek(d.curweek)}
                       </span>
@@ -295,8 +297,8 @@ export default function ControlStock() {
                 <div className="cs-bml-title">
                   <strong>Rak Belum Masuk Lot</strong>
                   <span>
-                    Udah ke-scan ke rak fisik, tapi rackcode-nya belum
-                    di-assign ke lot/loccode manapun
+                    Udah ke-scan ke rak fisik, tapi rackcode-nya belum di-assign
+                    ke lot/loccode manapun
                   </span>
                 </div>
                 <div className="cs-bml-qty">
@@ -325,9 +327,7 @@ export default function ControlStock() {
                       key={r.rackcode}
                       className="cs-rack-detail-row cs-rack-chip-blue"
                     >
-                      <span className="cs-rack-detail-code">
-                        {r.rackcode}
-                      </span>
+                      <span className="cs-rack-detail-code">{r.rackcode}</span>
                       <span className="cs-week-badge">
                         {formatWhsWeek(r.curweek)}
                       </span>
@@ -346,117 +346,117 @@ export default function ControlStock() {
               manapun (fginvc.fgloc).
             </div>
           ) : (
-            <div className="cs-table-wrap">
-              <table className="cs-table">
-                <thead>
-                  <tr>
-                    <th>No</th>
-                    <th>Lokasi (Lot)</th>
-                    <th>Jumlah Rak</th>
-                    <th>Detail Rak (Kode &amp; Minggu)</th>
-                    <th>Qty Lokasi</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.lokasi.map((loc, idx) => {
-                    const rowKey = loc.loccol + idx;
-                    const isExpanded = expandedRows.has(rowKey);
-                    // Urut detail rak paling tua duluan (curweek terkecil).
-                    // Rak yang belum ketemu curweek-nya (kosong) ditaruh
-                    // paling belakang.
-                    const sortedRacks = [...loc.racks].sort((a, b) => {
-                      if (!a.curweek && !b.curweek) return 0;
-                      if (!a.curweek) return 1;
-                      if (!b.curweek) return -1;
-                      return a.curweek.localeCompare(b.curweek);
-                    });
+            <div className="cs-lokasi-list">
+              {result.lokasi.map((loc, idx) => {
+                const rowKey = loc.loccol + idx;
+                const isExpanded = expandedRows.has(rowKey);
+                // Urut detail rak paling tua duluan (curweek terkecil).
+                // Rak yang belum ketemu curweek-nya (kosong) ditaruh
+                // paling belakang.
+                const sortedRacks = [...loc.racks].sort((a, b) => {
+                  if (!a.curweek && !b.curweek) return 0;
+                  if (!a.curweek) return 1;
+                  if (!b.curweek) return -1;
+                  return a.curweek.localeCompare(b.curweek);
+                });
 
-                    return (
-                      <tr key={rowKey}>
-                        <td>{idx + 1}</td>
-                        <td>
-                          <span
+                return (
+                  <div key={rowKey} className="cs-lokasi-row-wrap">
+                    <div className="cs-lokasi-row">
+                      <div className="cs-lokasi-cell cs-lokasi-cell-no">
+                        <span className="cs-lokasi-rank-badge">{idx + 1}</span>
+                      </div>
+
+                      <div className="cs-lokasi-cell cs-lokasi-cell-loc">
+                        <span className="cs-lokasi-cell-label">
+                          <MapPin size={13} /> Lokasi (Lot)
+                        </span>
+                        <span
+                          className={
+                            "cs-loc-badge cs-loc-badge-" +
+                            loc.dominant_kategori.toLowerCase()
+                          }
+                        >
+                          {loc.loccol}
+                        </span>
+                      </div>
+
+                      <div className="cs-lokasi-cell cs-lokasi-cell-rak">
+                        <span className="cs-lokasi-cell-label">
+                          <Layers size={13} /> Jumlah Rak
+                        </span>
+                        <span className="cs-lokasi-rak-value">
+                          {loc.jumlah_rak}
+                        </span>
+                      </div>
+
+                      <div className="cs-lokasi-cell cs-lokasi-cell-detail">
+                        <span className="cs-lokasi-cell-label">
+                          Detail Rak (Kode &amp; Minggu)
+                        </span>
+                        {loc.racks.length === 0 ? (
+                          <span className="cs-muted">—</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="cs-rack-toggle"
+                            onClick={() => toggleExpand(rowKey)}
+                          >
+                            {isExpanded ? (
+                              <ChevronDown size={14} />
+                            ) : (
+                              <ChevronRight size={14} />
+                            )}
+                            {loc.jumlah_rak} rak · klik untuk detail
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="cs-lokasi-cell cs-lokasi-cell-qty">
+                        <span className="cs-lokasi-cell-label">
+                          <Boxes size={13} /> Qty Lokasi
+                        </span>
+                        <span className="cs-qty">{loc.qty_lokasi}</span>
+                      </div>
+                    </div>
+
+                    {isExpanded && loc.racks.length > 0 && (
+                      <div className="cs-rack-detail-list">
+                        {sortedRacks.map((r) => (
+                          <div
+                            key={r.rackcode}
                             className={
-                              "cs-loc-badge cs-loc-badge-" +
-                              loc.dominant_kategori.toLowerCase()
+                              "cs-rack-detail-row" +
+                              (r.terverifikasi ? "" : " cs-rack-chip-warn") +
+                              (!r.sesuai ? " cs-rack-chip-mismatch" : "")
+                            }
+                            title={
+                              r.terverifikasi
+                                ? r.sesuai
+                                  ? `${r.rackcode} • ${r.kategori} • qty ${r.qty}`
+                                  : `${r.rackcode} • isi rak berbeda dari item yang dicari (qty tercatat ${r.qty})`
+                                : `${r.rackcode} • belum terverifikasi di tabel rack`
                             }
                           >
-                            {loc.loccol}
-                          </span>
-                          <div className="cs-locpath">
-                            {loc.whscode} / {loc.locblock}
+                            <span className="cs-rack-detail-code">
+                              {r.rackcode}
+                            </span>
+                            <span className="cs-week-badge">
+                              {formatWhsWeek(r.curweek)}
+                            </span>
+                            <span className="cs-rack-detail-kat">
+                              {r.kategori}
+                            </span>
+                            <span className="cs-rack-detail-qty">
+                              qty {r.qty}
+                            </span>
                           </div>
-                        </td>
-                        <td className="cs-center">
-                          {loc.jumlah_rak}
-                          {loc.maxrack ? (
-                            <span className="cs-muted"> / {loc.maxrack}</span>
-                          ) : null}
-                        </td>
-                        <td>
-                          {loc.racks.length === 0 ? (
-                            <span className="cs-muted">—</span>
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                className="cs-rack-toggle"
-                                onClick={() => toggleExpand(rowKey)}
-                              >
-                                {isExpanded ? (
-                                  <ChevronDown size={14} />
-                                ) : (
-                                  <ChevronRight size={14} />
-                                )}
-                                {loc.jumlah_rak} rak · klik untuk detail
-                              </button>
-                              {isExpanded && (
-                                <div className="cs-rack-detail-list">
-                                  {sortedRacks.map((r) => (
-                                    <div
-                                      key={r.rackcode}
-                                      className={
-                                        "cs-rack-detail-row" +
-                                        (r.terverifikasi
-                                          ? ""
-                                          : " cs-rack-chip-warn") +
-                                        (!r.sesuai
-                                          ? " cs-rack-chip-mismatch"
-                                          : "")
-                                      }
-                                      title={
-                                        r.terverifikasi
-                                          ? r.sesuai
-                                            ? `${r.rackcode} • ${r.kategori} • qty ${r.qty}`
-                                            : `${r.rackcode} • isi rak berbeda dari item yang dicari (qty tercatat ${r.qty})`
-                                          : `${r.rackcode} • belum terverifikasi di tabel rack`
-                                      }
-                                    >
-                                      <span className="cs-rack-detail-code">
-                                        {r.rackcode}
-                                      </span>
-                                      <span className="cs-week-badge">
-                                        {formatWhsWeek(r.curweek)}
-                                      </span>
-                                      <span className="cs-rack-detail-kat">
-                                        {r.kategori}
-                                      </span>
-                                      <span className="cs-rack-detail-qty">
-                                        qty {r.qty}
-                                      </span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </td>
-                        <td className="cs-center cs-qty">{loc.qty_lokasi}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </>
@@ -472,6 +472,16 @@ export default function ControlStock() {
 }
 
 const csStyles = `
+.cs-home-bar { display: flex; gap: 6px; margin-bottom: 16px;
+  background: #fff; border-radius: 12px; padding: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+.cs-home-btn { display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 8px; background: #f1f5f9; color: #475569; text-decoration: none; }
+.cs-home-btn:hover { background: #e2e8f0; color: #1e293b; }
+@media (max-width: 560px) {
+  .cs-home-bar { gap: 4px; padding: 5px; }
+  .cs-home-btn { width: 34px; height: 34px; }
+}
+
 .cs-page { max-width: 1100px; margin: 0 auto; }
 .cs-header { margin-bottom: 1.5rem; }
 .cs-eyebrow { font-size: 12px; font-weight: 700; color: #0021b3; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
@@ -496,20 +506,21 @@ const csStyles = `
 
 .cs-empty-state { text-align: center; padding: 3rem 1rem; color: #94a3b8; font-size: 14px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 
-.cs-item-card { background: linear-gradient(135deg, #0021b3, #0038f0); border-radius: 18px; padding: 20px 24px; color: #fff; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 1.25rem; }
-.cs-item-code { font-size: 20px; font-weight: 800; letter-spacing: 0.02em; }
-.cs-item-descr { font-size: 13px; opacity: 0.85; margin-top: 2px; }
-.cs-summary-grid { display: flex; gap: 12px; }
-.cs-summary-box { display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.12); border-radius: 12px; padding: 10px 16px; }
-.cs-summary-box strong { display: block; font-size: 17px; font-weight: 800; line-height: 1.1; }
-.cs-summary-box span { display: block; font-size: 11px; opacity: 0.85; }
+.cs-item-card { background: linear-gradient(135deg, #0021b3, #0038f0); border-radius: 16px; padding: 16px 18px; color: #fff; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
+.cs-item-code { font-size: 18px; font-weight: 800; letter-spacing: 0.02em; }
+.cs-item-descr { font-size: 12.5px; opacity: 0.85; margin-top: 2px; }
+.cs-summary-grid { display: grid; grid-auto-flow: column; grid-template-columns: none; gap: 8px; margin-bottom: 0; flex: 0 0 auto; }
+.cs-summary-box { background: rgba(255,255,255,0.14); border-radius: 14px; padding: 12px; color: #fff; text-align: center; min-width: 76px; }
+.cs-summary-box strong { display: block; font-size: 17px; font-weight: 800; }
+.cs-summary-box span { display: block; font-size: 10px; opacity: 0.85; margin-top: 2px; }
 
-.cs-table-wrap { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: auto; }
-.cs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.cs-table thead th { position: sticky; top: 0; background: #f8fafc; color: #475569; font-weight: 700; text-align: left; padding: 10px 14px; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
-.cs-table tbody td { padding: 10px 14px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
-.cs-table tbody tr:last-child td { border-bottom: none; }
-.cs-table tbody tr:hover { background: #f8fafc; }
+.cs-lokasi-list { display: flex; flex-direction: column; gap: 8px; }
+.cs-lokasi-row-wrap { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
+.cs-lokasi-row { display: grid; grid-template-columns: 34px 1.5fr 0.8fr 1.6fr 0.9fr; align-items: center; gap: 10px; padding: 10px 14px; }
+.cs-lokasi-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cs-lokasi-cell-label { display: none; }
+.cs-lokasi-rank-badge { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: #eef2ff; color: #4338ca; font-weight: 800; font-size: 11px; }
+.cs-lokasi-rak-value { font-weight: 700; color: #334155; font-size: 13px; }
 .cs-center { text-align: center; }
 .cs-qty { font-weight: 700; color: #0f172a; }
 .cs-muted { color: #94a3b8; }
@@ -537,6 +548,7 @@ const csStyles = `
 .cs-rack-toggle:hover { background: #eef2ff; border-color: #c7d2fe; color: #0021b3; }
 
 .cs-rack-detail-list { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.cs-lokasi-row-wrap .cs-rack-detail-list { margin-top: 0; padding: 0 14px 12px 58px; }
 .cs-rack-detail-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 5px 10px; font-size: 11px; }
 .cs-rack-detail-row.cs-rack-chip-warn { background: #fefce8; border-color: #fde68a; }
 .cs-rack-detail-row.cs-rack-chip-mismatch { background: #fef2f2; border-color: #fecaca; }
@@ -563,4 +575,63 @@ const csStyles = `
 .cs-bml-card-blue .cs-bml-qty { color: #1e3a8a; }
 .cs-rack-detail-row.cs-rack-chip-blue { background: #eff6ff; border-color: #bfdbfe; }
 .cs-rack-chip-blue .cs-rack-detail-code { color: #1e40af; }
+
+/* ===== Mobile (<= 640px) ===== */
+@media (max-width: 640px) {
+  .cs-page { max-width: 100%; padding: 0 4px; }
+  .cs-header h1 { font-size: 18px; }
+  .cs-header p { max-width: 100%; }
+
+  .cs-search-card { padding: 10px; }
+  .cs-search-field input { font-size: 14px; min-width: 0; }
+  .cs-btn-cari { padding: 9px 14px; font-size: 12px; }
+  .cs-suggest-list { left: 8px; right: 8px; }
+
+  .cs-filter-bar { flex-wrap: wrap; gap: 6px; }
+  .cs-filter-group { flex: 1; }
+  .cs-filter-btn { flex: 1; padding: 8px 6px; text-align: center; }
+
+  .cs-item-card { flex-direction: column; align-items: flex-start; padding: 16px; gap: 12px; }
+  .cs-item-code { font-size: 17px; word-break: break-all; }
+  .cs-summary-grid { width: 100%; grid-auto-flow: row; grid-template-columns: repeat(3, 1fr); }
+  .cs-summary-box { min-width: 0; }
+  .cs-summary-box strong { font-size: 15px; }
+
+  .cs-bml-head { flex-wrap: wrap; }
+  .cs-bml-qty { text-align: left; margin-left: 26px; }
+  .cs-bml-chips, .cs-bml-detail-list { margin-left: 0; }
+
+  .cs-rack-detail-row { font-size: 11px; padding: 6px 8px; }
+  .cs-rack-detail-qty { margin-left: 0; }
+
+  /* List lokasi (grid row) → di HP kolomnya ditumpuk 1 per baris,
+     nomor urut jadi badge bulat pojok kiri, dan tiap sel dikasih label
+     kecil di atasnya — pola yang sama kayak Control FIFO Cross Docking. */
+  .cs-lokasi-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    position: relative;
+    padding: 12px 14px 12px 40px;
+  }
+  .cs-lokasi-cell-no { position: absolute; top: 12px; left: 10px; }
+  .cs-lokasi-cell {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px dashed #f1f5f9;
+    padding-bottom: 6px;
+  }
+  .cs-lokasi-cell:last-child { border-bottom: none; padding-bottom: 0; }
+  .cs-lokasi-cell-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .cs-lokasi-row-wrap .cs-rack-detail-list { padding: 0 14px 12px 14px; }
+}
 `;

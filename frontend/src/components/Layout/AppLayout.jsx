@@ -12,7 +12,13 @@ import {
 } from "lucide-react";
 
 // Halaman yang TIDAK menampilkan navbar menu (Dashboard/Input/Laporan)
-const HIDE_NAV_ON = ["/overtime", "/employees", "/transfer", "/karawang"];
+const HIDE_NAV_ON = [
+  "/overtime",
+  "/employees",
+  "/transfer",
+  "/karawang",
+  "/control-stock",
+];
 
 const NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard", icon: <LayoutDashboard size={16} /> },
@@ -26,11 +32,13 @@ export default function AppLayout({ children, user }) {
   const showNav = !HIDE_NAV_ON.some((path) =>
     location.pathname.startsWith(path),
   );
-  // Modul Transfer Rak dipakai fullscreen di lapangan (3 shift) — header
-  // bar dibuang total, tombol Home dipindah ke sub-nav punya modul itu sendiri.
+  // Modul Transfer Rak & Control Stock dipakai fullscreen di lapangan —
+  // header bar dibuang total, tombol Home dipindah ke bar sendiri punya
+  // modul itu (lihat KarawangSubNav / cs-home-bar).
   const hideHeader =
     location.pathname.startsWith("/transfer") ||
-    location.pathname.startsWith("/karawang");
+    location.pathname.startsWith("/karawang") ||
+    location.pathname.startsWith("/control-stock");
 
   return (
     <>
