@@ -106,6 +106,69 @@ class KarawangCrossDockingModel {
 
     return { item, qty, kategori, lastupdated };
   }
+
+  // Validasi OUTBOUND: dipanggil dashboardFull buat item yang overscan
+  // (qty_scanned > qty_target) — cek per rak, apakah qty item itu di rak
+  // tersebut SEKARANG (live Cross Docking) udah berkurang dibanding pas
+  // discan. Berkurang = indikasi kuat udah ada outbound dari rak itu
+  // setelah operator scan (bukan berarti pasti salah input/dobel scan).
+  // Ringan: 1 rackcode+item = 1 request /stock-cd/detail (endpoint yang
+  // sama dipakai verifyCollie), BUKAN query detail-all yang berat.
+  // Validasi OUTBOUND: dipanggil dashboardFull buat item yang overscan
+  // (qty_scanned > qty_target) — cek per rak, apakah qty item itu di rak
+  // tersebut SEKARANG (live Cross Docking) udah berkurang dibanding pas
+  // discan. Balikin `diff` MENTAH (qty_scanned - qty_live) — BOLEH MINUS
+  // kalau live-nya malah lebih gede dari pas discan (rak itu nampung
+  // pindahan dari rak lain). Sengaja gak di-floor 0 di sini; caller
+  // (controller) yang jumlahin diff dari SEMUA rak dalam 1 item dulu baru
+  // floor 0 di akhir — biar surplus di satu rak (nampung pindahan) bisa
+  // nge-offset defisit di rak lain (kasus barang pindah rak, bukan bener2
+  // outbound dari gudang). Kalau tiap rak di-floor sendiri2 duluan, kasus
+  // pindah-rak keitung dobel jadi "outbound" padahal barangnya masih ada,
+  // cuma beda rak.
+  static async checkOutbound(rackcode, item, qtyScanned) {
+    const kode = (rackcode || "").trim();
+    const kodeItem = (item || "").trim();
+    if (!kode || !kodeItem) {
+      return {
+        rackcode: kode,
+        qty_scanned: qtyScanned,
+        qty_live: 0,
+        diff: 0,
+        check_failed: true,
+      };
+    }
+
+    let detailRows = [];
+    try {
+      detailRows = await CrossDockingClient.fetchDetail(kode, kodeItem);
+    } catch (err) {
+      console.error(
+        `KarawangCrossDockingModel.checkOutbound: gagal ambil detail ${kode}/${kodeItem}:`,
+        err,
+      );
+      // Gagal nembak CD — diff 0 (netral), jangan nge-klaim outbound
+      // ataupun surplus tanpa bukti.
+      return {
+        rackcode: kode,
+        qty_scanned: qtyScanned,
+        qty_live: null,
+        diff: 0,
+        check_failed: true,
+      };
+    }
+
+    const qtyLive = (detailRows || []).length;
+    const diff = qtyScanned - qtyLive;
+
+    return {
+      rackcode: kode,
+      qty_scanned: qtyScanned,
+      qty_live: qtyLive,
+      diff,
+      check_failed: false,
+    };
+  }
 }
 
 module.exports = KarawangCrossDockingModel;

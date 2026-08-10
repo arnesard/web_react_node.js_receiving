@@ -69,6 +69,91 @@ function ItemDetailModal({ item, onClose, onEdit }) {
             <strong>{Math.max(0, item.sisa_qty)}</strong>
           </div>
 
+          {item.outbound && item.outbound.confirmed_qty > 0 && (
+            <>
+              <div
+                className="ko-modal-detail-row"
+                style={{
+                  background: "#eff6ff",
+                  borderRadius: 6,
+                  padding: "4px 6px",
+                }}
+              >
+                <span style={{ color: "#1d4ed8" }}>
+                  Qty hasil scan asli (sebelum netting)
+                </span>
+                <strong style={{ color: "#1d4ed8" }}>
+                  {item.raw_qty_scanned}
+                </strong>
+              </div>
+              <div
+                className="ko-modal-section-title"
+                style={{ color: "#1d4ed8" }}
+              >
+                Status Outbound —{" "}
+                {item.outbound.fully_explained
+                  ? "selisih terjelaskan penuh, rak sudah outbound"
+                  : "sebagian terjelaskan outbound"}
+              </div>
+              <div
+                className="ko-cd-modal-table-scroll"
+                style={{ maxHeight: 200 }}
+              >
+                <table className="ko-data-table">
+                  <thead>
+                    <tr>
+                      <th>Rak</th>
+                      <th>Qty Discan</th>
+                      <th>Qty Live CD Sekarang</th>
+                      <th>Keterangan</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {item.outbound.racks.map((r, idx) => (
+                      <tr key={`${r.rackcode}-${idx}`}>
+                        <td className="ko-strong">{r.rackcode}</td>
+                        <td className="ko-mono">{r.qty_scanned}</td>
+                        <td className="ko-mono">
+                          {r.check_failed ? "gagal cek" : r.qty_live}
+                        </td>
+                        <td className="ko-mono">
+                          {r.check_failed ? (
+                            "-"
+                          ) : r.qty_outbound > 0 ? (
+                            <span style={{ color: "#1d4ed8" }}>
+                              outbound {r.qty_outbound}
+                            </span>
+                          ) : r.qty_surplus > 0 ? (
+                            <span style={{ color: "#059669" }}>
+                              nampung pindahan +{r.qty_surplus}
+                            </span>
+                          ) : (
+                            "sesuai"
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="ko-muted" style={{ fontSize: 10, marginTop: 4 }}>
+                Rak dengan "nampung pindahan" dianggap nutup selisih outbound di
+                rak lain (barang pindah rak, bukan bener-bener keluar gudang) —
+                makanya cuma selisih bersih yang dianggap outbound.
+                {item.outbound.excess_qty > 0 && (
+                  <>
+                    {" "}
+                    Dari total {item.outbound.confirmed_qty} pcs confirmed
+                    outbound, cuma {item.outbound.netted_qty} pcs yang dipotong
+                    dari card (buat nutup selisih ke target); sisa{" "}
+                    {item.outbound.excess_qty} pcs outbound di luar selisih ini
+                    gak mempengaruhi tampilan qty di card.
+                  </>
+                )}
+              </div>
+            </>
+          )}
+
           <div className="ko-modal-section-title">
             Operator &amp; rak yang sudah discan ({detail.length})
           </div>
@@ -157,9 +242,9 @@ function VarianceDetailModal({ items, onClose }) {
                   <tr>
                     <th>Item</th>
                     <th>Deskripsi</th>
-                    <th>Target</th>
-                    <th>Discan</th>
-                    <th>Sisa</th>
+                    <th>Barcode</th>
+                    <th>counted</th>
+                    <th>variance</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -213,9 +298,7 @@ function KarantinaCutoffSettingModal({
   const [dateVal, setDateVal] = useState(
     `${wibParts.year}-${wibParts.month}-${wibParts.day}`,
   );
-  const [timeVal, setTimeVal] = useState(
-    `${wibParts.hour}:${wibParts.minute}`,
-  );
+  const [timeVal, setTimeVal] = useState(`${wibParts.hour}:${wibParts.minute}`);
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
@@ -269,7 +352,7 @@ function KarantinaCutoffSettingModal({
       Swal.fire({
         icon: "success",
         title: "Balik ke cutoff otomatis",
-        text: "Cutoff bakal otomatis \"hari ini jam 12:00 WIB\", geser tiap ganti hari.",
+        text: 'Cutoff bakal otomatis "hari ini jam 12:00 WIB", geser tiap ganti hari.',
         timer: 2000,
         showConfirmButton: false,
       });
@@ -304,13 +387,11 @@ function KarantinaCutoffSettingModal({
           </button>
         </div>
         <div className="ko-cd-modal-body">
-          <div
-            style={{ fontSize: 12, color: "#475569", marginBottom: 14 }}
-          >
-            Barang dengan tanggal update Cross Docking (WIB) mulai dari
-            tanggal &amp; jam di bawah ini dianggap "Barang Karantina" —
-            belum resmi masuk stok gudang, gak dihitung di Total Barcode /
-            Variance / Progress Scan.
+          <div style={{ fontSize: 12, color: "#475569", marginBottom: 14 }}>
+            Barang dengan tanggal update Cross Docking (WIB) mulai dari tanggal
+            &amp; jam di bawah ini dianggap "Barang Karantina" — belum resmi
+            masuk stok gudang, gak dihitung di Total Barcode / Variance /
+            Progress Scan.
           </div>
 
           <div style={{ marginBottom: 4, fontSize: 12, color: "#334155" }}>
@@ -431,9 +512,7 @@ function KarantinaDetailModal({ items, cutoff, onClose }) {
         </div>
         <div className="ko-cd-modal-body">
           {cutoffLabel && (
-            <div
-              style={{ fontSize: 12, color: "#475569", marginBottom: 10 }}
-            >
+            <div style={{ fontSize: 12, color: "#475569", marginBottom: 10 }}>
               Barang dengan last update Cross Docking mulai{" "}
               <strong>
                 {cutoffLabel.date} {cutoffLabel.time}
@@ -443,9 +522,7 @@ function KarantinaDetailModal({ items, cutoff, onClose }) {
             </div>
           )}
           {sorted.length === 0 ? (
-            <div className="ko-empty">
-              Gak ada barang karantina saat ini.
-            </div>
+            <div className="ko-empty">Gak ada barang karantina saat ini.</div>
           ) : (
             <div className="ko-cd-modal-table-scroll">
               <table className="ko-data-table">
@@ -496,9 +573,12 @@ function formatFetchedAt(iso) {
 
 // 4 status warna item: putih (belum ada yang discan sama sekali), kuning
 // (lagi proses, sebagian udah kescan), hijau (selesai/qty udah sesuai
-// target), merah pastel (overscan — qty yang kescan udah ngelewatin target
-// Cross Docking, kemungkinan ada barcode yang harusnya gak boleh kescan
-// di item ini, atau target-nya berubah/berkurang setelah sebagian discan).
+// target — INI JUGA statusnya kalau overscan-nya udah ke-konfirmasi live
+// outbound di Cross Docking, karena qty_scanned yang ditampilin di card
+// udah di-netting sama qty yang outbound; detail biru-nya taro di modal,
+// bukan di warna card), merah pastel (over — masih overscan dan
+// belum/gak kejelasin sama outbound, kemungkinan ada barcode yang
+// harusnya gak boleh kescan atau dobel input).
 function getItemStatus(it) {
   if (it.overscan) return "over";
   if (it.qty_scanned <= 0) return "empty";
@@ -845,7 +925,8 @@ export default function KarawangDashboardPage() {
                       className="ko-radial"
                       style={{
                         "--pct": it.persen,
-                        "--ring-color": status === "over" ? "#dc2626" : "#7c3aed",
+                        "--ring-color":
+                          status === "over" ? "#dc2626" : "#7c3aed",
                       }}
                     >
                       <span className="ko-radial-label">{it.persen}%</span>
@@ -858,6 +939,12 @@ export default function KarawangDashboardPage() {
                       {it.qty_scanned} / {it.qty_target}
                       <div className="ko-muted" style={{ fontSize: 9 }}>
                         {it.collie_scanned} collie
+                        {it.outbound && it.outbound.confirmed_qty > 0 && (
+                          <span style={{ color: "#2563eb" }}>
+                            {" "}
+                            · ada outbound
+                          </span>
+                        )}
                       </div>
                     </div>
                   </button>

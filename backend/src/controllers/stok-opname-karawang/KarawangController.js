@@ -1035,7 +1035,7 @@ class KarawangController {
         });
       });
 
-      const items = allStock.items.map((t) => {
+      let items = allStock.items.map((t) => {
         const s = scannedMap.get(t.item) || {
           collie_scanned: 0,
           qty_scanned: 0,
@@ -1060,6 +1060,110 @@ class KarawangController {
           detail: detailByItem.get(t.item) || [],
         };
       });
+
+      // Validasi OUTBOUND: khusus item overscan, cek live per rak apakah
+      // qty-nya SEKARANG di Cross Docking udah berkurang dibanding pas
+      // discan (indikasi barang udah outbound setelah discan, bukan salah
+      // input). Jalan OTOMATIS tiap dashboard dibuka (bukan cuma pas
+      // refresh), tapi di-scope KETAT cuma buat rak-rak item overscan aja
+      // (bukan detail-all), dan dibatasin concurrency biar gak nembak CD
+      // kebanyakan sekaligus kalau item overscan-nya banyak.
+      const outboundChecks = [];
+      items.forEach((it) => {
+        if (!it.overscan) return;
+        const rakMap = new Map(); // rackcode -> total qty_scanned di item ini
+        it.detail.forEach((d) => {
+          if (!d.rackcode) return;
+          rakMap.set(
+            d.rackcode,
+            (rakMap.get(d.rackcode) || 0) + (d.qty_scanned || 0),
+          );
+        });
+        rakMap.forEach((qtyScanned, rackcode) => {
+          outboundChecks.push({ item: it.item, rackcode, qtyScanned });
+        });
+      });
+
+      if (outboundChecks.length) {
+        const results = await mapWithConcurrency(
+          outboundChecks,
+          5,
+          async (chk) =>
+            KarawangCrossDockingModel.checkOutbound(
+              chk.rackcode,
+              chk.item,
+              chk.qtyScanned,
+            ),
+        );
+
+        const outboundByItem = new Map();
+        outboundChecks.forEach((chk, idx) => {
+          const r = results[idx];
+          if (!outboundByItem.has(chk.item)) outboundByItem.set(chk.item, []);
+          outboundByItem.get(chk.item).push({ ...r, item: chk.item });
+        });
+
+        items = items.map((it) => {
+          const racks = outboundByItem.get(it.item);
+          if (!racks) return it;
+          // NET dulu SEMUA rak dalam 1 item (boleh minus per rak), baru
+          // floor 0 di paling akhir — biar surplus di 1 rak (nampung
+          // pindahan dari rak lain yang sama-sama udah discan) nge-offset
+          // defisit di rak lain, bukan keitung dobel jadi outbound.
+          const netDiff = racks.reduce((sum, r) => sum + (r.diff || 0), 0);
+          const confirmedQty = Math.max(0, netDiff);
+          const overQty = it.qty_scanned - it.qty_target;
+          // NETTING: qty yang udah confirmed outbound dianggap "gak lagi
+          // ada" pas dihitung ke card/progress — jadi card balik nampilin
+          // qty_scanned seolah gak overscan (misal 1100 discan, 100
+          // confirmed outbound -> card nampilin 1000/1000, ijo). Angka
+          // MENTAH (sebelum di-netting) tetep disimpen di raw_qty_scanned
+          // buat dipakai detail biru di modal.
+          const rawQtyScanned = it.qty_scanned;
+          // Netting DIBATASI cuma buat nutup selisih overscan (overQty) —
+          // gak boleh lebih, biar gak bikin card keliatan defisit baru di
+          // bawah target. Kalau confirmedQty > overQty (net outbound lebih
+          // gede dari yang dibutuhin buat nutup selisih), sisanya dianggap
+          // di luar tanggung jawab validasi overscan ini — tetep dicatet
+          // & keliatan di detail modal, tapi gak dipotong lagi dari card.
+          const nettedQty = Math.min(confirmedQty, Math.max(0, overQty));
+          const effectiveScanned = Math.max(0, rawQtyScanned - nettedQty);
+          return {
+            ...it,
+            raw_qty_scanned: rawQtyScanned,
+            qty_scanned: effectiveScanned,
+            sisa_qty: it.qty_target - effectiveScanned,
+            persen: it.qty_target
+              ? Math.min(100, Math.floor((effectiveScanned / it.qty_target) * 100))
+              : 0,
+            overscan: it.qty_target
+              ? effectiveScanned > it.qty_target
+              : effectiveScanned > 0,
+            outbound: {
+              checked: true,
+              confirmed_qty: confirmedQty,
+              netted_qty: nettedQty,
+              excess_qty: confirmedQty - nettedQty,
+              // Selisih overscan udah kejelasin SELURUHNYA sama outbound
+              // yang confirmed di rak-rak ini -> aman diklasifikasiin
+              // "outbound", bukan anomali/salah input.
+              fully_explained: confirmedQty >= overQty,
+              // Tampilan per-rak buat modal: diff positif = pcs yang
+              // ilang dari rak itu (outbound kandidat), diff negatif =
+              // rak itu malah nampung pindahan (surplus) dari rak lain.
+              racks: racks.map((r) => ({
+                rackcode: r.rackcode,
+                qty_scanned: r.qty_scanned,
+                qty_live: r.qty_live,
+                check_failed: r.check_failed,
+                qty_outbound: r.diff > 0 ? r.diff : 0,
+                qty_surplus: r.diff < 0 ? -r.diff : 0,
+                is_outbound: r.diff > 0,
+              })),
+            },
+          };
+        });
+      }
 
       const totalBarcode = allStock.total_qty; // 1 baris Detail All = 1 pcs = 1 barcode
       const variance = totalBarcode - totalScanned.total_qty;
