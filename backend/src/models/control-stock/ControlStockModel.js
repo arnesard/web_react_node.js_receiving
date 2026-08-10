@@ -131,6 +131,60 @@ class ControlStockModel {
     return map;
   }
 
+  // Ambil qty item yang MASIH NYANGKUT di rackcode "~" — yaitu unit yang
+  // udah masuk tabel `rack` (udah tercatat sistem) tapi BELUM ditempatin
+  // ke rak/lot fisik beneran (makanya rackcode-nya cuma placeholder "~",
+  // bukan kode rak asli, dan otomatis gak nyantol ke slot rackcode1-4
+  // manapun di `fgloc` — makanya harus di-query LANGSUNG ke `rack`,
+  // gak bisa lewat join fgloc kayak alur lokasi normal).
+  //
+  // Dikelompokkan per probcode + curweek biar user bisa liat breakdown-nya
+  // (mis. ada 40 unit OK minggu 2631, 5 unit OE minggu 2630, dst), bukan
+  // cuma 1 angka total doang.
+  static async _getBelumMasukLot(itemCode, kategoriFilter = null) {
+    const kode = (itemCode || "").trim();
+    const [rows] = await poolEdp.query(
+      `SELECT probcode, curweek, COUNT(*) AS qty
+       FROM rack
+       WHERE item = ? AND rackcode = '~'
+       GROUP BY probcode, curweek`,
+      [kode],
+    );
+
+    let detail = rows.map((r) => ({
+      kategori: (r.probcode || "").trim()
+        ? r.probcode.trim().toUpperCase()
+        : "OK",
+      curweek: (r.curweek == null ? "" : String(r.curweek)).trim(),
+      qty: Number(r.qty),
+    }));
+
+    // Sama kayak filter kategori di level lokasi — kalau ada filter
+    // OK/OE, cuma baris yang kategorinya cocok yang dihitung.
+    if (kategoriFilter) {
+      detail = detail.filter((d) => d.kategori === kategoriFilter);
+    }
+
+    detail.sort((a, b) => (a.curweek || "").localeCompare(b.curweek || ""));
+
+    const qtyTotal = detail.reduce((s, d) => s + d.qty, 0);
+    const kategoriBreakdown = [
+      ...detail
+        .reduce((map, d) => {
+          map.set(d.kategori, (map.get(d.kategori) || 0) + d.qty);
+          return map;
+        }, new Map())
+        .entries(),
+    ].map(([kategori, qty]) => ({ kategori, qty }));
+
+    return {
+      ada: qtyTotal > 0,
+      qty_total: qtyTotal,
+      kategori_breakdown: kategoriBreakdown,
+      detail,
+    };
+  }
+
   // Autocomplete pencarian kode item (dipakai di kotak search halaman
   // Control Stock). Cari dari fgloc.item yang lagi ada lokasinya (bukan
   // dari master item, biar hasil pencarian relevan — item yang gak punya
@@ -238,11 +292,21 @@ class ControlStockModel {
     });
 
     if (!rows.length) {
+      // Walau item ini gak ketemu di lokasi/lot manapun, tetep bisa aja
+      // ada unit yang udah masuk sistem tapi nyangkut di rackcode "~"
+      // (belum ditempatin). Cek itu juga biar gak keliatan "kosong total"
+      // padahal sebenernya ada stok yang lagi nunggu ditempatin.
+      const [descrMap, belumMasukLot] = await Promise.all([
+        this._getDescriptions([kode]),
+        this._getBelumMasukLot(kode, filterKategori),
+      ]);
       return {
         item: kode,
-        deskripsi: "-",
+        deskripsi: descrMap.get(kode) || "-",
+        filter_kategori: filterKategori || "ALL",
         summary: { total_lokasi: 0, total_rak: 0, total_qty: 0 },
         lokasi: [],
+        belum_masuk_lot: belumMasukLot,
       };
     }
 
@@ -256,9 +320,10 @@ class ControlStockModel {
       });
     });
 
-    const [rackMap, descrMap] = await Promise.all([
+    const [rackMap, descrMap, belumMasukLot] = await Promise.all([
       this._getRackContents([...allRackcodes]),
       this._getDescriptions([kode]),
+      this._getBelumMasukLot(kode, filterKategori),
     ]);
 
     const deskripsi = descrMap.get(kode) || "-";
@@ -454,6 +519,11 @@ class ControlStockModel {
         total_qty: totalQtyGlobal,
       },
       lokasi,
+      // Section baru: unit item ini yang masih nyangkut di rackcode "~"
+      // (udah tercatat sistem, tapi BELUM ditempatin ke rak/lot fisik).
+      // Terpisah dari `lokasi` & `summary` di atas karena secara konsep
+      // ini bukan "lokasi" — belum ada loccode/lot sama sekali.
+      belum_masuk_lot: belumMasukLot,
     };
   }
 }

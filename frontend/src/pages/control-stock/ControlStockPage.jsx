@@ -34,6 +34,8 @@ export default function ControlStock() {
   // Baris lokasi yang lagi expanded (nampilin detail rackcode+week+qty).
   // Isinya rowKey (loccol + idx), di-reset tiap kali hasil pencarian ganti.
   const [expandedRows, setExpandedRows] = useState(() => new Set());
+  // Toggle detail breakdown section "Belum Masuk Lot" (rackcode "~").
+  const [showBelumMasukLot, setShowBelumMasukLot] = useState(false);
   const debounceRef = useRef(null);
   const boxRef = useRef(null);
 
@@ -89,6 +91,7 @@ export default function ControlStock() {
       });
       setResult(res.data.data);
       setExpandedRows(new Set());
+      setShowBelumMasukLot(false);
     } catch (err) {
       setResult(null);
       Swal.fire("Gagal", err.response?.data?.message || err.message, "error");
@@ -220,6 +223,59 @@ export default function ControlStock() {
               </div>
             </div>
           </div>
+
+          {result.belum_masuk_lot?.ada && (
+            <div className="cs-bml-card">
+              <div
+                className="cs-bml-head"
+                onClick={() => setShowBelumMasukLot((v) => !v)}
+              >
+                {showBelumMasukLot ? (
+                  <ChevronDown size={16} />
+                ) : (
+                  <ChevronRight size={16} />
+                )}
+                <div className="cs-bml-title">
+                  <strong>Belum Masuk Lot</strong>
+                  <span>
+                    Unit udah tercatat sistem, tapi belum ditempatin ke rak
+                    (rackcode "~")
+                  </span>
+                </div>
+                <div className="cs-bml-qty">
+                  {result.belum_masuk_lot.qty_total}
+                  <span>qty</span>
+                </div>
+              </div>
+
+              <div className="cs-bml-chips">
+                {result.belum_masuk_lot.kategori_breakdown.map((k) => (
+                  <span
+                    key={k.kategori}
+                    className={
+                      "cs-loc-badge cs-loc-badge-" + k.kategori.toLowerCase()
+                    }
+                  >
+                    {k.kategori}: {k.qty}
+                  </span>
+                ))}
+              </div>
+
+              {showBelumMasukLot && (
+                <div className="cs-rack-detail-list cs-bml-detail-list">
+                  {result.belum_masuk_lot.detail.map((d, i) => (
+                    <div key={i} className="cs-rack-detail-row cs-rack-chip-warn">
+                      <span className="cs-week-badge">
+                        {formatWhsWeek(d.curweek)}
+                      </span>
+                      <span className="cs-rack-detail-kat">{d.kategori}</span>
+                      <span className="cs-rack-detail-qty">qty {d.qty}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {result.lokasi.length === 0 ? (
             <div className="cs-empty-state">
@@ -426,4 +482,14 @@ const csStyles = `
 .cs-rack-chip-mismatch .cs-rack-detail-code { color: #b91c1c; }
 .cs-rack-detail-kat { color: #475569; font-weight: 600; }
 .cs-rack-detail-qty { color: #0f172a; font-weight: 700; margin-left: auto; }
+
+.cs-bml-card { background: #fffbeb; border: 1.5px dashed #fcd34d; border-radius: 16px; padding: 14px 16px; margin-bottom: 1.25rem; }
+.cs-bml-head { display: flex; align-items: center; gap: 10px; cursor: pointer; color: #92400e; }
+.cs-bml-title { flex: 1; display: flex; flex-direction: column; }
+.cs-bml-title strong { font-size: 14px; font-weight: 800; color: #78350f; }
+.cs-bml-title span { font-size: 12px; color: #92400e; opacity: 0.85; }
+.cs-bml-qty { font-size: 18px; font-weight: 800; color: #78350f; text-align: right; line-height: 1.1; }
+.cs-bml-qty span { display: block; font-size: 10px; font-weight: 700; opacity: 0.7; text-transform: uppercase; }
+.cs-bml-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; margin-left: 26px; }
+.cs-bml-detail-list { margin-left: 26px; margin-top: 10px; }
 `;
