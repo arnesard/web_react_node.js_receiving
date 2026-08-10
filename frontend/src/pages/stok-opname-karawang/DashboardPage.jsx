@@ -209,18 +209,30 @@ function ItemDetailModal({ item, onClose, onEdit }) {
   );
 }
 
-// Modal variance: nampilin item + deskripsi yang belum discan lengkap sama
-// operator (sisa_qty > 0), diurutin dari yang paling banyak kurangnya.
+// Modal variance: nampilin SEMUA item (termasuk yang variance-nya udah 0 /
+// pas), diurutin item yang masih ada selisih (sisa_qty != 0) duluan
+// (paling gede kurangnya di paling atas), item yang udah pas ditaruh di
+// bawah. Sebelumnya item yang variance 0 di-filter/disembunyiin — sekarang
+// ditampilin semua biar kelihatan status LENGKAP semua item, bukan cuma
+// yang bermasalah.
 function VarianceDetailModal({ items, onClose }) {
-  const belum = items
-    .filter((it) => it.sisa_qty > 0)
-    .sort((a, b) => b.sisa_qty - a.sisa_qty);
+  const belumCount = items.filter((it) => it.sisa_qty !== 0).length;
+  const sorted = [...items].sort((a, b) => {
+    const aBeda = a.sisa_qty !== 0;
+    const bBeda = b.sisa_qty !== 0;
+    if (aBeda !== bBeda) return aBeda ? -1 : 1; // yang masih beda duluan
+    if (aBeda && bBeda) return Math.abs(b.sisa_qty) - Math.abs(a.sisa_qty);
+    return a.item.localeCompare(b.item); // yang udah pas: urut item
+  });
 
   return (
     <div className="ko-cd-modal-backdrop" onClick={onClose}>
       <div className="ko-cd-modal" onClick={(e) => e.stopPropagation()}>
         <div className="ko-cd-modal-header">
-          <h2>Item Belum Discan Lengkap ({belum.length})</h2>
+          <h2>
+            Detail Variance per Item ({items.length} item, {belumCount} belum
+            pas)
+          </h2>
           <button
             type="button"
             className="ko-cd-modal-close"
@@ -231,10 +243,8 @@ function VarianceDetailModal({ items, onClose }) {
           </button>
         </div>
         <div className="ko-cd-modal-body">
-          {belum.length === 0 ? (
-            <div className="ko-empty">
-              Semua item udah kescan lengkap, gak ada variance.
-            </div>
+          {sorted.length === 0 ? (
+            <div className="ko-empty">Belum ada data item.</div>
           ) : (
             <div className="ko-cd-modal-table-scroll">
               <table className="ko-data-table">
@@ -242,14 +252,21 @@ function VarianceDetailModal({ items, onClose }) {
                   <tr>
                     <th>Item</th>
                     <th>Deskripsi</th>
-                    <th>Barcode</th>
+                    <th>target</th>
                     <th>counted</th>
                     <th>variance</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {belum.map((it) => (
-                    <tr key={it.item}>
+                  {sorted.map((it) => (
+                    <tr
+                      key={it.item}
+                      className={
+                        it.sisa_qty === 0
+                          ? "ko-variance-row-ok"
+                          : "ko-variance-row-diff"
+                      }
+                    >
                       <td className="ko-strong">{it.item}</td>
                       <td>{it.deskripsi}</td>
                       <td className="ko-mono">{it.qty_target}</td>
@@ -820,7 +837,7 @@ export default function KarawangDashboardPage() {
                     type="button"
                     className="ko-summary-box ko-summary-box-clickable"
                     onClick={() => setShowVarianceModal(true)}
-                    title="Klik buat liat item yang belum discan lengkap"
+                    title="Klik buat liat detail variance semua item"
                     style={
                       full.ringkasan.variance !== 0
                         ? {

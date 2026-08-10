@@ -18,6 +18,7 @@ import KarawangScan from "./pages/stok-opname-karawang/ScanPage";
 import KarawangDashboard from "./pages/stok-opname-karawang/DashboardPage";
 import KarawangBarcode from "./pages/stok-opname-karawang/BarcodePage";
 import KarawangCrossDocking from "./pages/stok-opname-karawang/CrossDockingPage";
+import KarawangFifo from "./pages/stok-opname-karawang/FifoPage";
 import "./App.css";
 
 const currentUser = { name: "Admin GT" };
@@ -45,6 +46,7 @@ function LayoutRoutes() {
         <Route path="/karawang/dashboard" element={<KarawangDashboard />} />
         <Route path="/karawang/barcode" element={<KarawangBarcode />} />
         <Route path="/karawang/cross-docking" element={<KarawangCrossDocking />} />
+        <Route path="/karawang/fifo" element={<KarawangFifo />} />
       </Routes>
     </AppLayout>
   );

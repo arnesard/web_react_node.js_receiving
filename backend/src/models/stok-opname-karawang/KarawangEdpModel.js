@@ -81,6 +81,31 @@ class KarawangEdpModel {
     return { item, qty, kategori, deskripsi };
   }
 
+  // Public: cari item dari bcmcfgv1.itemcatalog, cocok berdasarkan KODE
+  // item (prefix, "KODE%") ATAU DESKRIPSI (substring, "%kata%"). Dipake
+  // kotak search fitur Control FIFO — operator sering apal deskripsi
+  // barang tapi lupa kode itemnya.
+  //
+  // Catatan performa: LIKE '%...%' di kolom descr emang gak bisa pakai
+  // index (full scan), tapi itemcatalog itu tabel MASTER item (jumlah
+  // barisnya jauh lebih sedikit dari fgloc/rack yang isinya transaksi),
+  // jadi masih aman buat query interaktif dengan LIMIT.
+  static async searchByKeyword(keyword, limit = 20) {
+    const kw = (keyword || "").trim();
+    if (!kw) return [];
+    const [rows] = await poolEdp.query(
+      `SELECT item, descr FROM bcmcfgv1.itemcatalog
+       WHERE item LIKE ? OR descr LIKE ?
+       ORDER BY (item LIKE ?) DESC, item
+       LIMIT ?`,
+      [`${kw}%`, `%${kw}%`, `${kw}%`, limit],
+    );
+    return rows.map((r) => ({
+      item: (r.item || "").trim(),
+      deskripsi: (r.descr || "").trim() || "-",
+    }));
+  }
+
   static async rackDetailsByBarcode(barcodes, chunkSize = 1000) {
     const map = new Map();
     const cleanBarcodes = [

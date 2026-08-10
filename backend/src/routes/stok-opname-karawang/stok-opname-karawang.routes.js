@@ -3,6 +3,7 @@ const express = require("express");
 const router = express.Router();
 const KarawangController = require("../../controllers/stok-opname-karawang/KarawangController");
 const CrossDockingController = require("../../controllers/stok-opname-karawang/CrossDockingController");
+const FifoController = require("../../controllers/stok-opname-karawang/FifoController");
 
 router.get("/batches", KarawangController.listBatches);
 router.get("/batches/active", KarawangController.getActiveBatch);
@@ -46,5 +47,10 @@ router.get(
   "/cross-docking/detail-all-export",
   CrossDockingController.detailAllExport,
 );
+
+// ── Control FIFO: search item (kode/deskripsi) → semua lot Cross
+// Docking tempat item itu berada, diurut week paling tua duluan ──
+router.get("/fifo/search-item", FifoController.searchItem);
+router.get("/fifo/locations", FifoController.locations);
 
 module.exports = router;

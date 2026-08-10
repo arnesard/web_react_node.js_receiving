@@ -5,7 +5,16 @@
 // Kolom tabel & kartu total dirender dinamis dari field apapun yang
 // dibalikin API-nya, biar gak perlu tau persis nama field di sana.
 import { useState } from "react";
-import { RefreshCw, Loader2, Download, Layers, Printer, X } from "lucide-react";
+import { Link } from "react-router-dom";
+import {
+  RefreshCw,
+  Loader2,
+  Download,
+  Layers,
+  Printer,
+  X,
+  ArrowDownWideNarrow,
+} from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
 import { karawangStyles } from "./karawangStyles";
@@ -549,12 +558,17 @@ export default function CrossDockingPage() {
       <style>{karawangStyles}</style>
       <KarawangSubNav />
 
-      <div className="ko-header">
-        <h1>Monitoring Stock Cross Docking</h1>
-        <p>
-          Data per rack/item, total, dan detail all — ditarik langsung dari web
-          Cross Docking.
-        </p>
+      <div className="ko-cd-title-row">
+        <div className="ko-header">
+          <h1>Monitoring Stock Cross Docking</h1>
+          <p>
+            Data per rack/item, total, dan detail all — ditarik langsung dari
+            web Cross Docking.
+          </p>
+        </div>
+        <Link to="/karawang/fifo" className="ko-btn-primary ko-cd-fifo-btn">
+          <ArrowDownWideNarrow size={16} /> Control FIFO
+        </Link>
       </div>
 
       <div className="ko-card">
