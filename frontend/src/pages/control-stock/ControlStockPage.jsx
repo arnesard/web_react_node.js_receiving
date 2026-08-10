@@ -36,6 +36,9 @@ export default function ControlStock() {
   const [expandedRows, setExpandedRows] = useState(() => new Set());
   // Toggle detail breakdown section "Belum Masuk Lot" (rackcode "~").
   const [showBelumMasukLot, setShowBelumMasukLot] = useState(false);
+  // Toggle detail breakdown section "Rak Belum Masuk Lot" (rackcode
+  // fisik, udah ke-scan, tapi belum ke-assign ke fgloc/loccode manapun).
+  const [showRakBelumMasukLot, setShowRakBelumMasukLot] = useState(false);
   const debounceRef = useRef(null);
   const boxRef = useRef(null);
 
@@ -92,6 +95,7 @@ export default function ControlStock() {
       setResult(res.data.data);
       setExpandedRows(new Set());
       setShowBelumMasukLot(false);
+      setShowRakBelumMasukLot(false);
     } catch (err) {
       setResult(null);
       Swal.fire("Gagal", err.response?.data?.message || err.message, "error");
@@ -270,6 +274,65 @@ export default function ControlStock() {
                       </span>
                       <span className="cs-rack-detail-kat">{d.kategori}</span>
                       <span className="cs-rack-detail-qty">qty {d.qty}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {result.rak_belum_masuk_lot?.ada && (
+            <div className="cs-bml-card cs-bml-card-blue">
+              <div
+                className="cs-bml-head"
+                onClick={() => setShowRakBelumMasukLot((v) => !v)}
+              >
+                {showRakBelumMasukLot ? (
+                  <ChevronDown size={16} />
+                ) : (
+                  <ChevronRight size={16} />
+                )}
+                <div className="cs-bml-title">
+                  <strong>Rak Belum Masuk Lot</strong>
+                  <span>
+                    Udah ke-scan ke rak fisik, tapi rackcode-nya belum
+                    di-assign ke lot/loccode manapun
+                  </span>
+                </div>
+                <div className="cs-bml-qty">
+                  {result.rak_belum_masuk_lot.qty_total}
+                  <span>qty · {result.rak_belum_masuk_lot.jumlah_rak} rak</span>
+                </div>
+              </div>
+
+              <div className="cs-bml-chips">
+                {result.rak_belum_masuk_lot.kategori_breakdown.map((k) => (
+                  <span
+                    key={k.kategori}
+                    className={
+                      "cs-loc-badge cs-loc-badge-" + k.kategori.toLowerCase()
+                    }
+                  >
+                    {k.kategori}: {k.qty}
+                  </span>
+                ))}
+              </div>
+
+              {showRakBelumMasukLot && (
+                <div className="cs-rack-detail-list cs-bml-detail-list">
+                  {result.rak_belum_masuk_lot.racks.map((r) => (
+                    <div
+                      key={r.rackcode}
+                      className="cs-rack-detail-row cs-rack-chip-blue"
+                    >
+                      <span className="cs-rack-detail-code">
+                        {r.rackcode}
+                      </span>
+                      <span className="cs-week-badge">
+                        {formatWhsWeek(r.curweek)}
+                      </span>
+                      <span className="cs-rack-detail-kat">{r.kategori}</span>
+                      <span className="cs-rack-detail-qty">qty {r.qty}</span>
                     </div>
                   ))}
                 </div>
@@ -492,4 +555,12 @@ const csStyles = `
 .cs-bml-qty span { display: block; font-size: 10px; font-weight: 700; opacity: 0.7; text-transform: uppercase; }
 .cs-bml-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; margin-left: 26px; }
 .cs-bml-detail-list { margin-left: 26px; margin-top: 10px; }
+
+.cs-bml-card-blue { background: #eff6ff; border-color: #93c5fd; }
+.cs-bml-card-blue .cs-bml-head { color: #1e40af; }
+.cs-bml-card-blue .cs-bml-title strong { color: #1e3a8a; }
+.cs-bml-card-blue .cs-bml-title span { color: #1e40af; }
+.cs-bml-card-blue .cs-bml-qty { color: #1e3a8a; }
+.cs-rack-detail-row.cs-rack-chip-blue { background: #eff6ff; border-color: #bfdbfe; }
+.cs-rack-chip-blue .cs-rack-detail-code { color: #1e40af; }
 `;

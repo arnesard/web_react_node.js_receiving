@@ -131,6 +131,100 @@ class ControlStockModel {
     return map;
   }
 
+  // Ambil detail rak yang UDAH FISIK ke-scan (tabel `rack`, rackcode
+  // beneran, bukan "~") tapi rackcode itu BELUM nempel di slot manapun
+  // (rackcode1-4) di baris `fgloc` manapun — artinya rak itu udah eksis &
+  // udah isi item, tapi belum di-assign ke lot/loccode.
+  //
+  // `rackcodes` di sini udah hasil filter di caller: rackcode fisik milik
+  // item ini yang TERBUKTI gak ketemu di query fgloc manapun.
+  //
+  // PENTING soal performa: query LANGSUNG filter `item = ?` di WHERE
+  // (bukan reuse _getRackContents yang narik SEMUA item di rackcode itu
+  // terus difilter belakangan di JS) — soalnya rackcode di sini kadang
+  // jumlahnya banyak (item yang umum/sering dipake bisa punya ratusan-
+  // ribuan rak fisik), jadi query yang gak perlu narik data item lain
+  // penting biar gak nambah beban ke DB EDP yang udah dipanggil beberapa
+  // kali di alur ini.
+  static async _getRakBelumMasukLot(rackcodes, itemCode, kategoriFilter = null) {
+    if (!rackcodes.length) {
+      return { ada: false, jumlah_rak: 0, qty_total: 0, kategori_breakdown: [], racks: [] };
+    }
+    const kode = (itemCode || "").trim();
+
+    // curweek per rackcode+probcode = curweek MAYORITAS (unit terbanyak),
+    // sama pola kayak _getRackContents — cuma di sini scope-nya udah
+    // dipersempit ke 1 item doang lewat WHERE item = ?, jadi jauh lebih
+    // murah buat DB dibanding narik semua item dulu baru difilter di JS.
+    const [rows] = await poolEdp.query(
+      `SELECT rackcode, probcode, curweek, qty_total AS qty
+       FROM (
+         SELECT rackcode, probcode, curweek,
+                SUM(cnt) OVER (PARTITION BY rackcode, probcode) AS qty_total,
+                ROW_NUMBER() OVER (
+                  PARTITION BY rackcode, probcode
+                  ORDER BY cnt DESC, curweek ASC
+                ) AS rn
+         FROM (
+           SELECT rackcode, probcode, curweek, COUNT(*) AS cnt
+           FROM rack
+           WHERE item = ? AND rackcode IN (?)
+           GROUP BY rackcode, probcode, curweek
+         ) base
+       ) ranked
+       WHERE rn = 1`,
+      [kode, rackcodes],
+    );
+
+    const byRackcode = new Map();
+    rows.forEach((r) => {
+      const rc = (r.rackcode || "").trim();
+      if (!byRackcode.has(rc)) byRackcode.set(rc, []);
+      byRackcode.get(rc).push({
+        kategori: (r.probcode || "").trim()
+          ? r.probcode.trim().toUpperCase()
+          : "OK",
+        curweek: (r.curweek == null ? "" : String(r.curweek)).trim(),
+        qty: Number(r.qty),
+      });
+    });
+
+    let racks = [...byRackcode.entries()].map(([rc, isi]) => {
+      const qty = isi.reduce((s, c) => s + c.qty, 0);
+      const kategoriList = [...new Set(isi.map((c) => c.kategori))];
+      const curweek = [...isi].sort((a, b) => {
+        if (b.qty !== a.qty) return b.qty - a.qty;
+        return a.curweek.localeCompare(b.curweek);
+      })[0].curweek;
+      return { rackcode: rc, qty, kategori: kategoriList.join(", "), kategoriList, curweek };
+    });
+
+    if (kategoriFilter) {
+      racks = racks.filter((r) => r.kategoriList.includes(kategoriFilter));
+    }
+    racks.sort((a, b) => (a.curweek || "").localeCompare(b.curweek || ""));
+
+    const qtyTotal = racks.reduce((s, r) => s + r.qty, 0);
+    const kategoriBreakdown = [
+      ...racks
+        .reduce((map, r) => {
+          r.kategoriList.forEach((k) => {
+            map.set(k, (map.get(k) || 0) + r.qty);
+          });
+          return map;
+        }, new Map())
+        .entries(),
+    ].map(([kategori, qty]) => ({ kategori, qty }));
+
+    return {
+      ada: racks.length > 0,
+      jumlah_rak: racks.length,
+      qty_total: qtyTotal,
+      kategori_breakdown: kategoriBreakdown,
+      racks,
+    };
+  }
+
   // Ambil qty item yang MASIH NYANGKUT di rackcode "~" — yaitu unit yang
   // udah masuk tabel `rack` (udah tercatat sistem) tapi BELUM ditempatin
   // ke rak/lot fisik beneran (makanya rackcode-nya cuma placeholder "~",
@@ -270,6 +364,21 @@ class ControlStockModel {
       driftRows = rows2;
     }
 
+    // Dari rackcode fisik yang beneran isi item ini, mana aja yang
+    // KETEMU nempel di suatu baris fgloc (lewat driftRows di atas) —
+    // sisanya (gak ketemu di manapun) berarti rak itu udah ke-scan tapi
+    // BELUM di-assign ke lot/loccode manapun.
+    const matchedRackcodeSet = new Set();
+    driftRows.forEach((r) => {
+      [r.rackcode1, r.rackcode2, r.rackcode3, r.rackcode4].forEach((rc) => {
+        const trimmed = (rc || "").trim();
+        if (trimmed) matchedRackcodeSet.add(trimmed);
+      });
+    });
+    const rackcodesBelumMasukLot = rackcodesFisik.filter(
+      (rc) => rc !== "~" && !matchedRackcodeSet.has(rc),
+    );
+
     // Gabung Tahap A + B, dedupe (baris fgloc yang sama bisa aja ke-tarik
     // dua-duanya kalau fgloc.item-nya emang udah bener DAN rak fisiknya
     // juga cocok — itu wajar, cukup ambil sekali).
@@ -294,11 +403,14 @@ class ControlStockModel {
     if (!rows.length) {
       // Walau item ini gak ketemu di lokasi/lot manapun, tetep bisa aja
       // ada unit yang udah masuk sistem tapi nyangkut di rackcode "~"
-      // (belum ditempatin). Cek itu juga biar gak keliatan "kosong total"
-      // padahal sebenernya ada stok yang lagi nunggu ditempatin.
-      const [descrMap, belumMasukLot] = await Promise.all([
+      // (belum ditempatin), ATAU udah ke-scan ke rak fisik tapi rak itu
+      // belum di-assign ke lot/loccode manapun. Cek dua-duanya biar gak
+      // keliatan "kosong total" padahal sebenernya ada stok yang lagi
+      // nunggu ditempatin.
+      const [descrMap, belumMasukLot, rakBelumMasukLot] = await Promise.all([
         this._getDescriptions([kode]),
         this._getBelumMasukLot(kode, filterKategori),
+        this._getRakBelumMasukLot(rackcodesBelumMasukLot, kode, filterKategori),
       ]);
       return {
         item: kode,
@@ -307,6 +419,7 @@ class ControlStockModel {
         summary: { total_lokasi: 0, total_rak: 0, total_qty: 0 },
         lokasi: [],
         belum_masuk_lot: belumMasukLot,
+        rak_belum_masuk_lot: rakBelumMasukLot,
       };
     }
 
@@ -320,10 +433,11 @@ class ControlStockModel {
       });
     });
 
-    const [rackMap, descrMap, belumMasukLot] = await Promise.all([
+    const [rackMap, descrMap, belumMasukLot, rakBelumMasukLot] = await Promise.all([
       this._getRackContents([...allRackcodes]),
       this._getDescriptions([kode]),
       this._getBelumMasukLot(kode, filterKategori),
+      this._getRakBelumMasukLot(rackcodesBelumMasukLot, kode, filterKategori),
     ]);
 
     const deskripsi = descrMap.get(kode) || "-";
@@ -519,11 +633,13 @@ class ControlStockModel {
         total_qty: totalQtyGlobal,
       },
       lokasi,
-      // Section baru: unit item ini yang masih nyangkut di rackcode "~"
-      // (udah tercatat sistem, tapi BELUM ditempatin ke rak/lot fisik).
-      // Terpisah dari `lokasi` & `summary` di atas karena secara konsep
-      // ini bukan "lokasi" — belum ada loccode/lot sama sekali.
+      // Section: unit item ini yang masih nyangkut di rackcode "~" (belum
+      // pernah ke-scan ke rak fisik sama sekali).
       belum_masuk_lot: belumMasukLot,
+      // Section: rak yang UDAH FISIK ke-scan & isi item ini, tapi
+      // rackcode-nya belum ke-assign ke slot manapun di fgloc (belum
+      // punya loccode/lot).
+      rak_belum_masuk_lot: rakBelumMasukLot,
     };
   }
 }
