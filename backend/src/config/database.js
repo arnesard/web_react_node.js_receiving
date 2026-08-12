@@ -45,6 +45,21 @@ const poolEdp = mysql.createPool({
   charset: "latin1",
 });
 
+// Koneksi keempat — DB "Monitoring Stock Cross Docking" (server EDP juga,
+// tapi instance/db terpisah: `fginvc_cd`), dipakai modul Control FIFO buat
+// Search Barcode. Sebelumnya cuma bisa lewat REST API (login + HTTP round
+// trip ke tiap request, lihat services/crossDockingClient.js) — connect
+// LANGSUNG ke DB-nya jauh lebih cepat buat query 1 barcode kayak gini.
+const poolCrossDocking = mysql.createPool({
+  host: process.env.DB_CD_HOST,
+  port: process.env.DB_CD_PORT,
+  database: process.env.DB_CD_NAME,
+  user: process.env.DB_CD_USER,
+  password: process.env.DB_CD_PASS,
+  waitForConnections: true,
+  connectionLimit: 5,
+});
+
 // Set session time_zone di setiap koneksi baru yang dibuka pool,
 // supaya fungsi MySQL seperti CURDATE(), NOW(), CURTIME() juga
 // menghitung "sekarang" versi WIB — bukan timezone default server MySQL.
@@ -55,5 +70,6 @@ function applySessionTimezone(pool) {
 }
 applySessionTimezone(poolUtama);
 applySessionTimezone(poolKarantina);
+applySessionTimezone(poolCrossDocking);
 
-module.exports = { poolUtama, poolKarantina, poolEdp };
+module.exports = { poolUtama, poolKarantina, poolEdp, poolCrossDocking };

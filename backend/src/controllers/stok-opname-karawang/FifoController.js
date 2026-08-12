@@ -42,6 +42,29 @@ class FifoController {
       });
     }
   }
+  // GET /fifo/search-barcode?barcode=...
+  // Tombol "Search Barcode" di Control FIFO: cari 1 barcode fisik,
+  // tampilin ada di lot/rak mana + collie (koli)-nya apa.
+  static async searchBarcode(req, res) {
+    try {
+      const barcode = (req.query.barcode || req.query.q || "").trim();
+      if (!barcode) {
+        return res.status(400).json({ message: "Barcode wajib diisi." });
+      }
+      const data = await KarawangFifoModel.searchByBarcode(barcode);
+      if (!data) {
+        return res.status(404).json({
+          message: `Barcode "${barcode}" tidak ditemukan di Cross Docking.`,
+        });
+      }
+      res.json({ data });
+    } catch (err) {
+      console.error("FifoController.searchBarcode gagal:", err);
+      res.status(502).json({
+        message: err.message || "Gagal mencari barcode di Cross Docking",
+      });
+    }
+  }
 }
 
 module.exports = FifoController;

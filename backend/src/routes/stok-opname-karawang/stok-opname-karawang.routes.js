@@ -51,6 +51,7 @@ router.get(
 // ── Control FIFO: search item (kode/deskripsi) → semua lot Cross
 // Docking tempat item itu berada, diurut week paling tua duluan ──
 router.get("/fifo/search-item", FifoController.searchItem);
+router.get("/fifo/search-barcode", FifoController.searchBarcode);
 router.get("/fifo/locations", FifoController.locations);
 
 module.exports = router;

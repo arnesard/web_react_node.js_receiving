@@ -20,6 +20,8 @@ import {
   ArrowLeft,
   ChevronDown,
   ChevronRight,
+  Barcode,
+  X,
 } from "lucide-react";
 import api from "../../api/axiosInstance";
 import { karawangStyles } from "./karawangStyles";
@@ -53,6 +55,15 @@ export default function FifoPage() {
   const [expandedLots, setExpandedLots] = useState(() => new Set());
   const debounceRef = useRef(null);
   const boxRef = useRef(null);
+
+  // Panel "Search Barcode" — terpisah dari pencarian item di atas, dibuka
+  // lewat tombol di header. Satu barcode fisik = 1 unit/pcs, hasilnya
+  // dipakai buat nunjukin barcode itu ada di lot/rak mana + collie apa.
+  const [showBarcodeSearch, setShowBarcodeSearch] = useState(false);
+  const [barcodeKeyword, setBarcodeKeyword] = useState("");
+  const [barcodeLoading, setBarcodeLoading] = useState(false);
+  const [barcodeResult, setBarcodeResult] = useState(null);
+  const [barcodeError, setBarcodeError] = useState("");
 
   const toggleExpand = (loccode) => {
     setExpandedLots((prev) => {
@@ -133,6 +144,33 @@ export default function FifoPage() {
     cariLokasi(item.item, filterMode);
   };
 
+  const cariBarcode = async (e) => {
+    e.preventDefault();
+    const kode = barcodeKeyword.trim();
+    if (!kode) return;
+    setBarcodeLoading(true);
+    setBarcodeError("");
+    setBarcodeResult(null);
+    try {
+      const res = await api.get("/stok-opname-karawang/fifo/search-barcode", {
+        params: { barcode: kode },
+      });
+      setBarcodeResult(res.data.data || []);
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message;
+      setBarcodeError(msg);
+    } finally {
+      setBarcodeLoading(false);
+    }
+  };
+
+  const toggleBarcodeSearch = () => {
+    setShowBarcodeSearch((v) => !v);
+    setBarcodeKeyword("");
+    setBarcodeResult(null);
+    setBarcodeError("");
+  };
+
   return (
     <div className="ko-page ko-page-wide">
       <style>{karawangStyles}</style>
@@ -146,13 +184,120 @@ export default function FifoPage() {
             Cross Docking DC Karawang — diurut dari yang paling tua.
           </p>
         </div>
-        <Link
-          to="/karawang/cross-docking"
-          className="ko-btn-secondary fifo-back-btn"
-        >
-          <ArrowLeft size={15} /> Monitoring Cross Docking
-        </Link>
+        <div className="fifo-header-actions">
+          <button
+            type="button"
+            className="ko-btn-secondary fifo-barcode-btn"
+            onClick={toggleBarcodeSearch}
+          >
+            <Barcode size={15} /> Search Barcode
+          </button>
+          <Link
+            to="/karawang/cross-docking"
+            className="ko-btn-secondary fifo-back-btn"
+          >
+            <ArrowLeft size={15} /> Monitoring Cross Docking
+          </Link>
+        </div>
       </div>
+
+      {showBarcodeSearch && (
+        <div className="ko-card fifo-barcode-card">
+          <div className="fifo-barcode-card-head">
+            <strong>
+              <Barcode size={15} /> Search Barcode
+            </strong>
+            <button
+              type="button"
+              className="fifo-barcode-close"
+              onClick={toggleBarcodeSearch}
+              title="Tutup"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          <form className="fifo-search-field" onSubmit={cariBarcode}>
+            <Search size={18} />
+            <input
+              type="text"
+              className="fifo-search-input"
+              placeholder="Scan atau ketik barcode..."
+              value={barcodeKeyword}
+              onChange={(e) => setBarcodeKeyword(e.target.value)}
+              autoFocus
+            />
+            <button
+              type="submit"
+              className="ko-btn-primary fifo-search-btn"
+              disabled={barcodeLoading}
+            >
+              {barcodeLoading ? (
+                <Loader2 size={16} className="ko-spin" />
+              ) : (
+                "Cari"
+              )}
+            </button>
+          </form>
+          <p className="fifo-barcode-hint">
+            {barcodeLoading
+              ? "Mencari... kalau gak ketemu di jalur cepat, otomatis nyoba tarik semua data Cross Docking (bisa agak lama)."
+              : "Tips: pastikan barcode discan/diketik persis, tanpa spasi di depan/belakang."}
+          </p>
+
+          {barcodeError && (
+            <div className="fifo-barcode-error">{barcodeError}</div>
+          )}
+
+          {barcodeResult && barcodeResult.length > 0 && (
+            <div className="fifo-barcode-result-list">
+              {barcodeResult.map((r, i) => (
+                <div key={r.barcode + i} className="fifo-barcode-result">
+                  <div className="fifo-barcode-result-row">
+                    <span className="fifo-barcode-result-label">Barcode</span>
+                    <span className="fifo-barcode-result-code">
+                      {r.barcode}
+                    </span>
+                  </div>
+                  <div className="fifo-barcode-result-row">
+                    <span className="fifo-barcode-result-label">Collie</span>
+                    <span className="ko-dropdown-id fifo-barcode-collie">
+                      {r.collie}
+                    </span>
+                  </div>
+                  <div className="fifo-barcode-result-row">
+                    <span className="fifo-barcode-result-label">Item</span>
+                    <span>
+                      {r.item}
+                      {r.deskripsi && r.deskripsi !== "-" ? (
+                        <span className="ko-muted"> — {r.deskripsi}</span>
+                      ) : null}
+                    </span>
+                  </div>
+                  <div className="fifo-barcode-result-row">
+                    <span className="fifo-barcode-result-label">Rackcode</span>
+                    <span>{r.rackcode}</span>
+                  </div>
+                  <div className="fifo-barcode-result-row">
+                    <span className="fifo-barcode-result-label">Lot</span>
+                    <span>{r.loccode}</span>
+                  </div>
+                  <div className="fifo-barcode-result-row">
+                    <span className="fifo-barcode-result-label">Week</span>
+                    <span>{formatWeek(r.curweek)}</span>
+                  </div>
+                  <div className="fifo-barcode-result-row">
+                    <span className="fifo-barcode-result-label">
+                      Kategori
+                    </span>
+                    <span>{r.kategori}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <form className="ko-card fifo-search-card" onSubmit={handleSubmit} ref={boxRef}>
         <div className="fifo-search-field">
@@ -361,7 +506,30 @@ const fifoStyles = `
 .fifo-header-row { display: flex; align-items: flex-start; justify-content: space-between;
   gap: 10px; flex-wrap: wrap; }
 .fifo-header-row .ko-header { flex: 1 1 280px; margin-bottom: 14px; }
-.fifo-back-btn { white-space: nowrap; }
+.fifo-header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fifo-back-btn, .fifo-barcode-btn { white-space: nowrap; }
+
+.fifo-barcode-card { margin-bottom: 14px; }
+.fifo-barcode-card-head { display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px; }
+.fifo-barcode-card-head strong { display: flex; align-items: center; gap: 6px; font-size: 14px;
+  color: #0f172a; }
+.fifo-barcode-close { display: flex; align-items: center; justify-content: center; width: 28px;
+  height: 28px; border-radius: 8px; border: none; background: #f1f5f9; color: #64748b; cursor: pointer; }
+.fifo-barcode-close:hover { background: #e2e8f0; color: #1e293b; }
+.fifo-barcode-hint { margin: 8px 0 0; font-size: 11.5px; color: #94a3b8; }
+.fifo-barcode-error { margin-top: 10px; background: #fef2f2; border: 1px solid #fecaca;
+  color: #b91c1c; font-size: 13px; padding: 10px 12px; border-radius: 10px; }
+.fifo-barcode-result-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.fifo-barcode-result { border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px 14px; }
+.fifo-barcode-result-row { display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 4px 0; border-bottom: 1px dashed #f1f5f9; font-size: 13px; }
+.fifo-barcode-result-row:last-child { border-bottom: none; }
+.fifo-barcode-result-label { font-size: 11px; font-weight: 700; color: #94a3b8;
+  text-transform: uppercase; letter-spacing: 0.03em; }
+.fifo-barcode-result-code { font-family: 'Consolas', 'SFMono-Regular', monospace; font-weight: 700;
+  color: #0f172a; }
+.fifo-barcode-collie { background: #eef2ff; padding: 3px 10px; border-radius: 999px; }
 
 .fifo-search-card { position: relative; }
 .fifo-search-field { display: flex; align-items: center; gap: 10px; color: #64748b; }
@@ -434,5 +602,7 @@ const fifoStyles = `
   .fifo-loc-label { display: flex; align-items: center; gap: 4px; font-size: 11px;
     font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.03em; }
   .fifo-rack-detail-list { padding: 0 14px 12px 14px; }
+  .fifo-header-actions { width: 100%; }
+  .fifo-header-actions .fifo-barcode-btn, .fifo-header-actions .fifo-back-btn { flex: 1; justify-content: center; }
 }
 `;

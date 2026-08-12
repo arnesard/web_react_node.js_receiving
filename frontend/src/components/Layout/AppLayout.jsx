@@ -12,13 +12,7 @@ import {
 } from "lucide-react";
 
 // Halaman yang TIDAK menampilkan navbar menu (Dashboard/Input/Laporan)
-const HIDE_NAV_ON = [
-  "/overtime",
-  "/employees",
-  "/transfer",
-  "/karawang",
-  "/control-stock",
-];
+const HIDE_NAV_ON = ["/overtime", "/employees", "/transfer", "/karawang", "/control-stock"];
 
 const NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard", icon: <LayoutDashboard size={16} /> },

@@ -141,7 +141,7 @@ export default function ControlStock() {
           <Search size={18} />
           <input
             type="text"
-            placeholder="Ketik atau scan kode item (mis. IBD1301)..."
+            placeholder="Ketik Deskripsi misal (MB 86) atau Kode Item (IBD1001)...."
             value={keyword}
             onChange={(e) => {
               setKeyword(e.target.value);
@@ -239,10 +239,10 @@ export default function ControlStock() {
                   <ChevronRight size={16} />
                 )}
                 <div className="cs-bml-title">
-                  <strong>Belum Masuk Lot</strong>
+                  <strong>Belum Masuk rak </strong>
                   <span>
                     Unit udah tercatat sistem, tapi belum ditempatin ke rak
-                    (rackcode "~")
+                    ("~")
                   </span>
                 </div>
                 <div className="cs-bml-qty">
@@ -362,63 +362,90 @@ export default function ControlStock() {
 
                 return (
                   <div key={rowKey} className="cs-lokasi-row-wrap">
-                    <div className="cs-lokasi-row">
-                      <div className="cs-lokasi-cell cs-lokasi-cell-no">
-                        <span className="cs-lokasi-rank-badge">{idx + 1}</span>
-                      </div>
+                    {loc.racks.length > 0 ? (
+                      <button
+                        type="button"
+                        className="cs-lokasi-row"
+                        onClick={() => toggleExpand(rowKey)}
+                      >
+                        <div className="cs-lokasi-cell cs-lokasi-cell-no">
+                          <span className="cs-lokasi-rank-badge">
+                            {idx + 1}
+                          </span>
+                        </div>
 
-                      <div className="cs-lokasi-cell cs-lokasi-cell-loc">
-                        <span className="cs-lokasi-cell-label">
-                          <MapPin size={13} /> Lokasi (Lot)
-                        </span>
-                        <span
-                          className={
-                            "cs-loc-badge cs-loc-badge-" +
-                            loc.dominant_kategori.toLowerCase()
-                          }
-                        >
-                          {loc.loccol}
-                        </span>
-                      </div>
-
-                      <div className="cs-lokasi-cell cs-lokasi-cell-rak">
-                        <span className="cs-lokasi-cell-label">
-                          <Layers size={13} /> Jumlah Rak
-                        </span>
-                        <span className="cs-lokasi-rak-value">
-                          {loc.jumlah_rak}
-                        </span>
-                      </div>
-
-                      <div className="cs-lokasi-cell cs-lokasi-cell-detail">
-                        <span className="cs-lokasi-cell-label">
-                          Detail Rak (Kode &amp; Minggu)
-                        </span>
-                        {loc.racks.length === 0 ? (
-                          <span className="cs-muted">—</span>
-                        ) : (
-                          <button
-                            type="button"
-                            className="cs-rack-toggle"
-                            onClick={() => toggleExpand(rowKey)}
+                        <div className="cs-lokasi-cell cs-lokasi-cell-loc">
+                          <span className="cs-lokasi-cell-label">
+                            <MapPin size={13} /> Lokasi (Lot)
+                          </span>
+                          <span
+                            className={
+                              "cs-loc-badge cs-loc-badge-" +
+                              loc.dominant_kategori.toLowerCase()
+                            }
                           >
+                            {loc.loccol}
+                          </span>
+                        </div>
+
+                        <div className="cs-lokasi-cell cs-lokasi-cell-rak">
+                          <span className="cs-lokasi-cell-label">
+                            <Layers size={13} /> Rak
+                          </span>
+                          <span className="cs-rack-toggle">
                             {isExpanded ? (
                               <ChevronDown size={14} />
                             ) : (
                               <ChevronRight size={14} />
                             )}
-                            {loc.jumlah_rak} rak · klik untuk detail
-                          </button>
-                        )}
-                      </div>
+                            {loc.jumlah_rak}
+                          </span>
+                        </div>
 
-                      <div className="cs-lokasi-cell cs-lokasi-cell-qty">
-                        <span className="cs-lokasi-cell-label">
-                          <Boxes size={13} /> Qty Lokasi
-                        </span>
-                        <span className="cs-qty">{loc.qty_lokasi}</span>
+                        <div className="cs-lokasi-cell cs-lokasi-cell-qty">
+                          <span className="cs-lokasi-cell-label">
+                            <Boxes size={13} /> Qty
+                          </span>
+                          <span className="cs-qty">{loc.qty_lokasi}</span>
+                        </div>
+                      </button>
+                    ) : (
+                      <div className="cs-lokasi-row cs-lokasi-row-static">
+                        <div className="cs-lokasi-cell cs-lokasi-cell-no">
+                          <span className="cs-lokasi-rank-badge">
+                            {idx + 1}
+                          </span>
+                        </div>
+
+                        <div className="cs-lokasi-cell cs-lokasi-cell-loc">
+                          <span className="cs-lokasi-cell-label">
+                            <MapPin size={13} /> Lokasi (Lot)
+                          </span>
+                          <span
+                            className={
+                              "cs-loc-badge cs-loc-badge-" +
+                              loc.dominant_kategori.toLowerCase()
+                            }
+                          >
+                            {loc.loccol}
+                          </span>
+                        </div>
+
+                        <div className="cs-lokasi-cell cs-lokasi-cell-rak">
+                          <span className="cs-lokasi-cell-label">
+                            <Layers size={13} /> Rak
+                          </span>
+                          <span className="cs-muted">—</span>
+                        </div>
+
+                        <div className="cs-lokasi-cell cs-lokasi-cell-qty">
+                          <span className="cs-lokasi-cell-label">
+                            <Boxes size={13} /> Qty
+                          </span>
+                          <span className="cs-qty">{loc.qty_lokasi}</span>
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     {isExpanded && loc.racks.length > 0 && (
                       <div className="cs-rack-detail-list">
@@ -516,18 +543,16 @@ const csStyles = `
 
 .cs-lokasi-list { display: flex; flex-direction: column; gap: 8px; }
 .cs-lokasi-row-wrap { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
-.cs-lokasi-row { display: grid; grid-template-columns: 34px 1.5fr 0.8fr 1.6fr 0.9fr; align-items: center; gap: 10px; padding: 10px 14px; }
+.cs-lokasi-row { display: grid; grid-template-columns: 34px 1.5fr 0.9fr 0.9fr; align-items: center; gap: 10px; width: 100%; border: none; background: transparent; padding: 10px 14px; cursor: pointer; font: inherit; color: inherit; text-align: left; appearance: none; }
+.cs-lokasi-row-static { cursor: default; }
 .cs-lokasi-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .cs-lokasi-cell-label { display: none; }
 .cs-lokasi-rank-badge { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: #eef2ff; color: #4338ca; font-weight: 800; font-size: 11px; }
-.cs-lokasi-rak-value { font-weight: 700; color: #334155; font-size: 13px; }
 .cs-center { text-align: center; }
-.cs-qty { font-weight: 700; color: #0f172a; }
+.cs-qty { font-weight: 800; color: #0f172a; font-size: 15px; }
 .cs-muted { color: #94a3b8; }
 
-.cs-locpath { font-size: 11px; color: #94a3b8; margin-top: 4px; }
-
-.cs-loc-badge { display: inline-block; font-family: 'Consolas', 'SFMono-Regular', monospace; font-weight: 700; font-size: 13px; padding: 5px 12px; border-radius: 8px; border: 1.5px solid; letter-spacing: 0.01em; }
+.cs-loc-badge { display: inline-block; font-family: 'Consolas', 'SFMono-Regular', monospace; font-weight: 700; font-size: 13px; padding: 4px 10px; border-radius: 8px; border: 1.5px solid; letter-spacing: 0.01em; width: fit-content; }
 .cs-loc-badge-ok { background: #dcfce7; color: #15803d; border-color: #86efac; }
 .cs-loc-badge-oe { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
 .cs-loc-badge-mixed { background: #f3e8ff; color: #7e22ce; border-color: #d8b4fe; }
@@ -544,8 +569,8 @@ const csStyles = `
 
 .cs-week-badge { display: inline-block; background: #eef2ff; color: #4338ca; font-weight: 700; font-size: 12px; padding: 3px 10px; border-radius: 999px; }
 
-.cs-rack-toggle { display: flex; align-items: center; gap: 6px; background: #f8fafc; border: 1px solid #e2e8f0; color: #334155; font-size: 12px; font-weight: 700; padding: 6px 10px; border-radius: 8px; cursor: pointer; transition: all 0.15s; }
-.cs-rack-toggle:hover { background: #eef2ff; border-color: #c7d2fe; color: #0021b3; }
+.cs-lokasi-cell-rak span:last-child { font-weight: 700; color: #334155; font-size: 13px; }
+.cs-rack-toggle { display: inline-flex; align-items: center; gap: 4px; }
 
 .cs-rack-detail-list { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
 .cs-lokasi-row-wrap .cs-rack-detail-list { margin-top: 0; padding: 0 14px 12px 58px; }
