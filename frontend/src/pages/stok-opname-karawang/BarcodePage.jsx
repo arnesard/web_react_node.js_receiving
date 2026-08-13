@@ -80,8 +80,6 @@ function formatFetchedAt(iso) {
 }
 
 export default function KarawangBarcodePage() {
-  const [batch, setBatch] = useState(null);
-  const [noBatch, setNoBatch] = useState(false);
   const [initLoading, setInitLoading] = useState(true);
 
   const [data, setData] = useState(null); // payload dari /barcode-details-live
@@ -94,13 +92,13 @@ export default function KarawangBarcodePage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
-  const loadData = useCallback((batchId, refresh) => {
+  const loadData = useCallback((refresh) => {
     if (refresh) setRefreshing(true);
     else setLoading(true);
     setError("");
     return api
       .get("/stok-opname-karawang/barcode-details-live", {
-        params: { batch_id: batchId, ...(refresh ? { refresh: "true" } : {}) },
+        params: refresh ? { refresh: "true" } : {},
       })
       .then((res) => setData(res.data.data))
       .catch((err) => {
@@ -116,22 +114,7 @@ export default function KarawangBarcodePage() {
   }, []);
 
   useEffect(() => {
-    api
-      .get("/stok-opname-karawang/batches/active")
-      .then((res) => {
-        const b = res.data.data;
-        if (!b) {
-          setNoBatch(true);
-          setInitLoading(false);
-          return;
-        }
-        setBatch(b);
-        return loadData(b.id, false).finally(() => setInitLoading(false));
-      })
-      .catch(() => {
-        setNoBatch(true);
-        setInitLoading(false);
-      });
+    loadData(false).finally(() => setInitLoading(false));
   }, [loadData]);
 
   const busy = loading || refreshing;
@@ -251,14 +234,12 @@ export default function KarawangBarcodePage() {
     });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    const batchName = (batch?.nama_batch || "barcode-karawang")
-      .trim()
-      .replace(/[^\w-]+/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-|-$/g, "")
-      .toLowerCase();
+    const timestamp = new Date()
+      .toISOString()
+      .slice(0, 19)
+      .replace(/[:T]/g, "-");
     link.href = url;
-    link.download = `${batchName || "barcode-karawang"}.csv`;
+    link.download = `barcode-karawang-${timestamp}.csv`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -278,11 +259,11 @@ export default function KarawangBarcodePage() {
             in WH, week.
           </p>
         </div>
-        {!initLoading && !noBatch && batch && (
+        {!initLoading && (
           <button
             type="button"
             className="ko-btn-secondary"
-            onClick={() => loadData(batch.id, true)}
+            onClick={() => loadData(true)}
             disabled={busy}
           >
             {refreshing ? (
@@ -301,11 +282,7 @@ export default function KarawangBarcodePage() {
         </div>
       )}
 
-      {!initLoading && noBatch && (
-        <div className="ko-empty">Belum ada batch opname aktif.</div>
-      )}
-
-      {!initLoading && !noBatch && batch && (
+      {!initLoading && (
         <>
           {fetchedAt && (
             <div className="ko-allstock-meta" style={{ marginBottom: 10 }}>
@@ -348,7 +325,7 @@ export default function KarawangBarcodePage() {
           {!refreshing && !loading && !error && data && data.has_data && (
             <>
               <div className="ko-batch-badge">
-                <Barcode size={13} /> {batch.nama_batch}
+                <Barcode size={13} /> Barcode Detail All Karawang
               </div>
 
               <div className="ko-card">

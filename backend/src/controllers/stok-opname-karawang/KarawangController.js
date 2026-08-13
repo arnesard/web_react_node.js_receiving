@@ -1,8 +1,9 @@
 // src/controllers/stok-opname-karawang/KarawangController.js
 // Modul "Stok Opname DC Karawang". Alur (Agustus 2026, versi full-live —
-// GAK ADA LAGI HALAMAN/STEP UPLOAD SAMA SEKALI): batch aktif dibikin
-// otomatis pas operator buka halaman scan (lihat getActiveBatch), gak
-// butuh input manual apa pun sebelum mulai. Operator scan RAK → divalidasi
+// GAK ADA LAGI HALAMAN/STEP UPLOAD SAMA SEKALI, DAN GAK ADA LAGI KONSEP
+// "BATCH"/sesi opname — semua data scan nyambung terus tanpa pemisah,
+// dihapus total atas permintaan user karena bikin ribet & rawan putus
+// kalau tabel batch-nya kenapa-napa). Operator scan RAK → divalidasi
 // LANGSUNG ke API Cross Docking: rackcode harus ketemu di sana, DAN lokasi
 // (loccol) yang diinput operator harus cocok sama field `loccode` versi
 // Cross Docking (live, bukan dari tabel lokal lagi) — lihat scanRak. Lalu
@@ -42,7 +43,6 @@ const CrossDockingClient = require("../../services/crossDockingClient");
 const { getField } = require("../../utils/apiField");
 const { mapWithConcurrency } = require("../../utils/concurrency");
 const { enrichWithBcCollie } = require("../../utils/bcCollieEnrichment");
-const KarawangBatchModel = require("../../models/stok-opname-karawang/KarawangBatchModel");
 const response = require("../../utils/response");
 const {
   getKarantinaCutoff,
@@ -89,13 +89,15 @@ function getIsoWeekFromInWh(inWh) {
   return Math.ceil(((thursday - yearStart) / 86400000 + 1) / 7);
 }
 
-// Cache dashboard per batch_id di memory proses backend (bukan per-user) —
-// tujuannya biar 10 operator/atasan yang buka dashboard bareng-bareng buat
-// batch yang SAMA gak masing-masing nembak Cross Docking sendiri-sendiri.
-// TTL pendek (bukan snapshot permanen) karena datanya emang dimaksudkan
-// live, cuma dibikin gak se-live-itu literally-setiap-request.
+// Cache dashboard di memory proses backend (bukan per-user, dan sekarang
+// SATU entry doang buat semua orang — dulu per batch_id, tapi konsep
+// batch udah dihapus total) — tujuannya biar 10 operator/atasan yang buka
+// dashboard bareng-bareng gak masing-masing nembak Cross Docking
+// sendiri-sendiri. TTL pendek (bukan snapshot permanen) karena datanya
+// emang dimaksudkan live, cuma dibikin gak se-live-itu
+// literally-setiap-request.
 const DASHBOARD_CACHE_TTL_MS = 45 * 1000;
-const dashboardCache = new Map(); // batch_id -> { expiresAt, data }
+let dashboardCacheEntry = null; // { expiresAt, data }
 
 // Sandi buat tombol "Reset Data Scan" di Dashboard — sengaja hardcode
 // simpel (project ini belum ada auth/login sama sekali, lihat catatan
@@ -249,19 +251,20 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
 }
 
 // Hitung target (qty per item) LIVE dari Cross Docking, scoped ke
-// rackcode-rackcode yang ada di lokasi batch ini — dicache singkat (lihat
+// rackcode-rackcode yang udah pernah discan — dicache singkat (lihat
 // DASHBOARD_CACHE_TTL_MS) biar banyak orang buka dashboard bareng-bareng
 // gak masing-masing nembak Cross Docking sendiri-sendiri.
-async function getLiveTarget(batchId) {
-  const cached = dashboardCache.get(batchId);
-  if (cached && cached.expiresAt > Date.now()) return cached.data;
+async function getLiveTarget() {
+  if (dashboardCacheEntry && dashboardCacheEntry.expiresAt > Date.now()) {
+    return dashboardCacheEntry.data;
+  }
 
-  // Scope-nya rak-rak yang UDAH discan di batch ini — dulu scope-nya dari
-  // tabel lokasi hasil upload manual, sekarang gak ada lagi upload-nya,
-  // jadi dashboard nampilin target utk rak yang emang udah dikunjungi
-  // operator (SENGAJA tetep discope, bukan query Cross Docking tanpa
-  // filter sama sekali, lihat catatan di atas).
-  const rackcodes = await KarawangScanModel.distinctRackcodes(batchId);
+  // Scope-nya rak-rak yang UDAH pernah discan — dulu scope-nya dari tabel
+  // lokasi hasil upload manual, sekarang gak ada lagi upload-nya, jadi
+  // dashboard nampilin target utk rak yang emang udah dikunjungi operator
+  // (SENGAJA tetep discope, bukan query Cross Docking tanpa filter sama
+  // sekali, lihat catatan di atas).
+  const rackcodes = await KarawangScanModel.distinctRackcodes();
   const qtyPerItem = new Map(); // item -> qty (jumlah baris pcs)
 
   // Concurrency dibatasi (bukan tembak semua rak sekaligus) — konsisten
@@ -305,10 +308,10 @@ async function getLiveTarget(batchId) {
     total_item: items.length,
     total_qty_target: target.reduce((sum, t) => sum + t.qty_target, 0),
   };
-  dashboardCache.set(batchId, {
+  dashboardCacheEntry = {
     expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS,
     data,
-  });
+  };
   return data;
 }
 
@@ -523,37 +526,6 @@ function computeAllStockData(raw, cutoff) {
 }
 
 class KarawangController {
-  // GET /api/stok-opname-karawang/batches
-  async listBatches(req, res) {
-    try {
-      const batches = await KarawangBatchModel.listAll();
-      return response.success(res, batches);
-    } catch (err) {
-      return response.error(res, err.message);
-    }
-  }
-
-  // GET /api/stok-opname-karawang/batches/active
-  // Gak ada lagi step "mulai opname" manual (dulu lewat halaman Upload) —
-  // batch aktif dibikin otomatis di sini kalau belum ada, karena target &
-  // validasi lokasi sekarang full live dari Cross Docking, gak butuh data
-  // yang diinput manual sebelum mulai scan.
-  async getActiveBatch(req, res) {
-    try {
-      let batch = await KarawangBatchModel.findLatestActive();
-      if (!batch) {
-        batch = await KarawangBatchModel.create({
-          nama_batch: `Opname ${new Date().toLocaleDateString("id-ID")}`,
-          nama_file: null,
-          id_karyawan_upload: currentUserId(req),
-        });
-      }
-      return response.success(res, batch);
-    } catch (err) {
-      return response.error(res, err.message);
-    }
-  }
-
   // POST /api/stok-opname-karawang/scan-rak
   // POST /api/stok-opname-karawang/validasi-lokasi
   // Step BARU sebelum scan rak: cek lokasi (loccol) yang diinput/discan
@@ -603,13 +575,9 @@ class KarawangController {
   // tampilin progress rak tsb (sudah/berapa collie).
   async scanRak(req, res) {
     try {
-      const { batch_id, rackcode, loccol } = req.body;
-      if (!batch_id || !rackcode || !loccol) {
-        return response.error(
-          res,
-          "batch_id, rackcode, dan loccol wajib diisi",
-          422,
-        );
+      const { rackcode, loccol } = req.body;
+      if (!rackcode || !loccol) {
+        return response.error(res, "rackcode dan loccol wajib diisi", 422);
       }
       const kode = String(rackcode).trim();
       const kodeLoccol = String(loccol).trim();
@@ -649,14 +617,8 @@ class KarawangController {
         );
       }
 
-      const sudahDiscanCollie = await KarawangScanModel.countByRak(
-        batch_id,
-        kode,
-      );
-      const sudahDiscanQty = await KarawangScanModel.sumQtyByRak(
-        batch_id,
-        kode,
-      );
+      const sudahDiscanCollie = await KarawangScanModel.countByRak(kode);
+      const sudahDiscanQty = await KarawangScanModel.sumQtyByRak(kode);
       const totalQtyTarget = rakDiCrossDocking.qty;
       const itemDiRak = rakDiCrossDocking.items;
 
@@ -672,7 +634,7 @@ class KarawangController {
         // Jumlah collie discan tetep dikirim buat info di UI, TANPA target
         // pembandingnya.
         total_collie_scanned: sudahDiscanCollie,
-        scan_list: await KarawangScanModel.listByRak(batch_id, kode),
+        scan_list: await KarawangScanModel.listByRak(kode),
         // Dikirim balik biar frontend bisa nyimpen & kirim ulang lewat
         // body scan-collie (field `items_cross_docking`) — biar gak perlu
         // manggil rackExists() dua kali (sekali di sini, sekali lagi di
@@ -696,27 +658,19 @@ class KarawangController {
   async scanCollie(req, res) {
     try {
       const {
-        batch_id,
         rackcode,
         collie,
         id_karyawan,
         loccol,
         items_cross_docking, // optional, dari respons scan-rak — hindari rackExists() dobel
       } = req.body;
-      if (!batch_id || !rackcode || !collie) {
-        return response.error(
-          res,
-          "batch_id, rackcode, dan collie wajib diisi",
-          422,
-        );
+      if (!rackcode || !collie) {
+        return response.error(res, "rackcode dan collie wajib diisi", 422);
       }
       const kodeRak = String(rackcode).trim();
       const kodeCollie = String(collie).trim();
 
-      const sudahAda = await KarawangScanModel.existsCollie(
-        batch_id,
-        kodeCollie,
-      );
+      const sudahAda = await KarawangScanModel.existsCollie(kodeCollie);
       if (sudahAda) {
         return res.status(400).json({
           status: "error",
@@ -787,7 +741,6 @@ class KarawangController {
       }
 
       const saved = await KarawangScanModel.create({
-        batch_id,
         rackcode: kodeRak,
         collie: kodeCollie,
         item: verifCd.item,
@@ -798,14 +751,8 @@ class KarawangController {
         loccol: loccol || null,
       });
 
-      const totalCollieDiRak = await KarawangScanModel.countByRak(
-        batch_id,
-        kodeRak,
-      );
-      const totalQtyDiRak = await KarawangScanModel.sumQtyByRak(
-        batch_id,
-        kodeRak,
-      );
+      const totalCollieDiRak = await KarawangScanModel.countByRak(kodeRak);
+      const totalQtyDiRak = await KarawangScanModel.sumQtyByRak(kodeRak);
       // Target qty pcs buat rak ini: LIVE dari Cross Docking (jumlah baris
       // detail-all buat rackcode ini = jumlah pcs, sama pola hitungnya
       // kayak dulu pas dari excel). Non-fatal kalau gagal — tetep balikin
@@ -839,11 +786,11 @@ class KarawangController {
   // POST /api/stok-opname-karawang/scan-collie/cancel
   async cancelScan(req, res) {
     try {
-      const { batch_id, collie } = req.body;
-      if (!batch_id || !collie) {
-        return response.error(res, "batch_id dan collie wajib diisi", 422);
+      const { collie } = req.body;
+      if (!collie) {
+        return response.error(res, "collie wajib diisi", 422);
       }
-      await KarawangScanModel.deleteCollie(batch_id, collie);
+      await KarawangScanModel.deleteCollie(collie);
       return response.success(res, { success: true });
     } catch (err) {
       return response.error(res, err.message);
@@ -854,7 +801,7 @@ class KarawangController {
   // Reset TOTAL hasil scan (TRUNCATE tabel stok_opname_karawang_scan) —
   // dilindungi sandi statis (lihat TRUNCATE_SCAN_PASSWORD) biar gak
   // kepencet gak sengaja, dipanggil dari tombol "Reset Data Scan" di
-  // Dashboard. Batch/target/lokasi TIDAK ikut kehapus, cuma progress scan.
+  // Dashboard. Cuma progress scan yang kehapus.
   async truncateScan(req, res) {
     try {
       const { password } = req.body;
@@ -862,10 +809,10 @@ class KarawangController {
         return response.error(res, "Sandi salah.", 403);
       }
       await KarawangScanModel.truncateAll();
-      // Cache dashboard per-batch (TTL 45 detik) masih bisa nyimpen angka
-      // lama sesaat — bersihin biar dashboard langsung nampilin 0 abis
-      // reset, gak nunggu TTL habis.
-      dashboardCache.clear();
+      // Cache dashboard (TTL 45 detik) masih bisa nyimpen angka lama
+      // sesaat — bersihin biar dashboard langsung nampilin 0 abis reset,
+      // gak nunggu TTL habis.
+      dashboardCacheEntry = null;
       return response.success(res, { success: true });
     } catch (err) {
       console.error("KarawangController.truncateScan gagal:", err);
@@ -873,24 +820,14 @@ class KarawangController {
     }
   }
 
-  // GET /api/stok-opname-karawang/dashboard?batch_id=
+  // GET /api/stok-opname-karawang/dashboard
   async dashboard(req, res) {
     try {
-      const batchId = req.query.batch_id;
-      if (!batchId) {
-        return response.error(res, "batch_id wajib diisi", 422);
-      }
-
-      const batch = await KarawangBatchModel.findById(batchId);
-      if (!batch) {
-        return response.error(res, "Batch tidak ditemukan", 404);
-      }
-
       const [{ target, total_item, total_qty_target }, scanned, picRakRows] =
         await Promise.all([
-          getLiveTarget(batchId),
-          KarawangScanModel.summaryPerItem(batchId),
-          KarawangScanModel.summaryPerItemPerPicRak(batchId),
+          getLiveTarget(),
+          KarawangScanModel.summaryPerItem(),
+          KarawangScanModel.summaryPerItemPerPicRak(),
         ]);
       const scannedMap = new Map(scanned.map((s) => [s.item, s]));
 
@@ -936,10 +873,9 @@ class KarawangController {
         };
       });
 
-      const totalScanned = await KarawangScanModel.totals(batchId);
+      const totalScanned = await KarawangScanModel.totals();
 
       return response.success(res, {
-        batch,
         items,
         ringkasan: {
           total_item,
@@ -963,7 +899,7 @@ class KarawangController {
     }
   }
 
-  // GET /api/stok-opname-karawang/dashboard/full?batch_id=&refresh=true
+  // GET /api/stok-opname-karawang/dashboard/full?refresh=true
   // Dashboard versi "compare ke SEMUA stok Cross Docking" (bukan cuma rak
   // yang udah discan). Query berat (`detail-all` tanpa filter) CUMA
   // dijalanin kalau `refresh=true` dikirim eksplisit dari tombol "Refresh
@@ -974,18 +910,9 @@ class KarawangController {
   // dulu" — bukan nunggu query berat jalan otomatis.
   async dashboardFull(req, res) {
     try {
-      const batchId = req.query.batch_id;
-      if (!batchId) {
-        return response.error(res, "batch_id wajib diisi", 422);
-      }
-      const batch = await KarawangBatchModel.findById(batchId);
-      if (!batch) {
-        return response.error(res, "Batch tidak ditemukan", 404);
-      }
-
       const wantRefresh = req.query.refresh === "true";
       if (!wantRefresh && !allStockCache) {
-        return response.success(res, { batch, has_data: false });
+        return response.success(res, { has_data: false });
       }
 
       let allStock;
@@ -1012,9 +939,9 @@ class KarawangController {
       }
 
       const [scanned, picRakRows, totalScanned] = await Promise.all([
-        KarawangScanModel.summaryPerItem(batchId),
-        KarawangScanModel.summaryPerItemPerPicRak(batchId),
-        KarawangScanModel.totals(batchId),
+        KarawangScanModel.summaryPerItem(),
+        KarawangScanModel.summaryPerItemPerPicRak(),
+        KarawangScanModel.totals(),
       ]);
       const scannedMap = new Map(scanned.map((s) => [s.item, s]));
 
@@ -1169,7 +1096,6 @@ class KarawangController {
       const variance = totalBarcode - totalScanned.total_qty;
 
       return response.success(res, {
-        batch,
         has_data: true,
         fetched_at: allStock.fetched_at,
         items,
@@ -1198,20 +1124,10 @@ class KarawangController {
     }
   }
 
-  // GET /api/stok-opname-karawang/barcode-details?batch_id=
+  // GET /api/stok-opname-karawang/barcode-details
   async barcodeDetails(req, res) {
     try {
-      const batchId = req.query.batch_id;
-      if (!batchId) {
-        return response.error(res, "batch_id wajib diisi", 422);
-      }
-
-      const batch = await KarawangBatchModel.findById(batchId);
-      if (!batch) {
-        return response.error(res, "Batch tidak ditemukan", 404);
-      }
-
-      const targets = await KarawangTargetModel.listBarcodeDetails(batchId);
+      const targets = await KarawangTargetModel.listBarcodeDetails();
       let edpMap = new Map();
       try {
         edpMap = await KarawangEdpModel.rackDetailsByBarcode(
@@ -1236,14 +1152,14 @@ class KarawangController {
         };
       });
 
-      return response.success(res, { batch, items });
+      return response.success(res, { items });
     } catch (err) {
       console.error("KarawangController.barcodeDetails gagal:", err);
       return response.error(res, err.message);
     }
   }
 
-  // GET /api/stok-opname-karawang/barcode-details-live?batch_id=&refresh=true
+  // GET /api/stok-opname-karawang/barcode-details-live?refresh=true
   // Versi baru Halaman Barcode: ambil LANGSUNG dari Cross Docking (per
   // baris/barcode), bukan lagi dari tabel target hasil upload Detail All
   // yang udah gak pernah keisi lagi (lihat catatan besar di atas file ini).
@@ -1253,18 +1169,9 @@ class KarawangController {
   // balikin has_data:false.
   async barcodeDetailsLive(req, res) {
     try {
-      const batchId = req.query.batch_id;
-      if (!batchId) {
-        return response.error(res, "batch_id wajib diisi", 422);
-      }
-      const batch = await KarawangBatchModel.findById(batchId);
-      if (!batch) {
-        return response.error(res, "Batch tidak ditemukan", 404);
-      }
-
       const wantRefresh = req.query.refresh === "true";
       if (!wantRefresh && !barcodeLiveCache) {
-        return response.success(res, { batch, has_data: false });
+        return response.success(res, { has_data: false });
       }
 
       let data;
@@ -1287,7 +1194,7 @@ class KarawangController {
         }
       }
 
-      return response.success(res, { batch, has_data: true, ...data });
+      return response.success(res, { has_data: true, ...data });
     } catch (err) {
       console.error("KarawangController.barcodeDetailsLive gagal:", err);
       return response.error(res, err.message);

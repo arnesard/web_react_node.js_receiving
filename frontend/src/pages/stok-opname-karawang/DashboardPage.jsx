@@ -605,8 +605,6 @@ function getItemStatus(it) {
 
 export default function KarawangDashboardPage() {
   const navigate = useNavigate();
-  const [batch, setBatch] = useState(null);
-  const [noBatch, setNoBatch] = useState(false);
   const [initLoading, setInitLoading] = useState(true);
 
   const [full, setFull] = useState(null); // payload dari /dashboard/full
@@ -619,13 +617,13 @@ export default function KarawangDashboardPage() {
   const [showKarantinaModal, setShowKarantinaModal] = useState(false);
   const [showCutoffSettingModal, setShowCutoffSettingModal] = useState(false);
 
-  const loadFull = useCallback((batchId, refresh) => {
+  const loadFull = useCallback((refresh) => {
     if (refresh) setRefreshing(true);
     else setLoading(true);
     setError("");
     return api
       .get("/stok-opname-karawang/dashboard/full", {
-        params: { batch_id: batchId, ...(refresh ? { refresh: "true" } : {}) },
+        params: refresh ? { refresh: "true" } : {},
       })
       .then((res) => setFull(res.data.data))
       .catch((err) => {
@@ -641,22 +639,7 @@ export default function KarawangDashboardPage() {
   }, []);
 
   useEffect(() => {
-    api
-      .get("/stok-opname-karawang/batches/active")
-      .then((res) => {
-        const b = res.data.data;
-        if (!b) {
-          setNoBatch(true);
-          setInitLoading(false);
-          return;
-        }
-        setBatch(b);
-        return loadFull(b.id, false).finally(() => setInitLoading(false));
-      })
-      .catch(() => {
-        setNoBatch(true);
-        setInitLoading(false);
-      });
+    loadFull(false).finally(() => setInitLoading(false));
   }, [loadFull]);
 
   const busy = loading || refreshing;
@@ -664,9 +647,8 @@ export default function KarawangDashboardPage() {
 
   // Tombol "Reset Data Scan" — minta sandi dulu (SweetAlert input, biar
   // gak kepencet gak sengaja), lalu konfirmasi sekali lagi karena ini
-  // ngosongin SEMUA hasil scan (batch/target tetap ada, cuma progress
-  // scan yang balik ke 0). Kalau sandi salah, backend balikin 403 dan
-  // ditampilin apa adanya ke operator.
+  // ngosongin SEMUA hasil scan (progress scan balik ke 0). Kalau sandi
+  // salah, backend balikin 403 dan ditampilin apa adanya ke operator.
   const handleTruncateScan = async () => {
     const { value: password } = await Swal.fire({
       title: "Reset Data Scan",
@@ -700,7 +682,7 @@ export default function KarawangDashboardPage() {
         timer: 1600,
         showConfirmButton: false,
       });
-      if (batch) loadFull(batch.id, false);
+      loadFull(false);
     } catch (err) {
       Swal.fire({
         icon: "error",
@@ -735,12 +717,12 @@ export default function KarawangDashboardPage() {
               Stok semua item Cross Docking dibandingkan hasil scan operator.
             </p>
           </div>
-          {!initLoading && !noBatch && batch && (
+          {!initLoading && (
             <div style={{ display: "flex", gap: 8 }}>
               <button
                 type="button"
                 className="ko-btn-secondary"
-                onClick={() => loadFull(batch.id, true)}
+                onClick={() => loadFull(true)}
                 disabled={busy}
               >
                 {refreshing ? (
@@ -777,11 +759,7 @@ export default function KarawangDashboardPage() {
           </div>
         )}
 
-        {!initLoading && noBatch && (
-          <div className="ko-empty">Belum ada batch opname aktif.</div>
-        )}
-
-        {!initLoading && !noBatch && batch && (
+        {!initLoading && (
           <>
             {fetchedAt && (
               <div className="ko-allstock-meta" style={{ marginBottom: 10 }}>
@@ -920,8 +898,6 @@ export default function KarawangDashboardPage() {
 
       {/* ── Bagian bawah (grid item) — ini aja yang scroll ── */}
       {!initLoading &&
-        !noBatch &&
-        batch &&
         !refreshing &&
         !loading &&
         !error &&

@@ -613,8 +613,18 @@ class ControlStockModel {
         // kategori, biar konsisten sama dominantKategori di atas). Ini
         // yang bikin "minggu" per lot jadi satu nilai gabungan, bukan
         // kepencar per baris fgloc lagi.
-        const semuaCurweek = allRacks.map((x) => x.curweek).filter(Boolean);
-        const whsweek = semuaCurweek.length ? semuaCurweek.sort()[0] : "";
+        // Kalau lot ini isinya campur >1 week beda, kasih tau week
+        // termudanya juga (whsweek_termuda) — biar UI bisa nampilin
+        // "2630 s/d 2632", sama kayak pola di Control FIFO.
+        const semuaCurweekSet = new Set(
+          allRacks.map((x) => x.curweek).filter(Boolean),
+        );
+        const semuaCurweekSorted = [...semuaCurweekSet].sort();
+        const whsweek = semuaCurweekSorted.length ? semuaCurweekSorted[0] : "";
+        const whsweekTermuda =
+          semuaCurweekSorted.length > 1
+            ? semuaCurweekSorted[semuaCurweekSorted.length - 1]
+            : "";
 
         // Terapkan filter (kalau ada) — level rak, bukan level lokasi.
         const racks = filterKategori
@@ -629,6 +639,7 @@ class ControlStockModel {
           loccol: grup.loccol,
           loccode: grup.loccode,
           whsweek,
+          whsweek_termuda: whsweekTermuda || undefined,
           maxrack: grup.maxrack,
           obstacle: grup.obstacle,
           dominant_kategori: dominantKategori,

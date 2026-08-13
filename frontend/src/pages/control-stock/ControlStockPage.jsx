@@ -388,6 +388,18 @@ export default function ControlStock() {
                           </span>
                         </div>
 
+                        <div className="cs-lokasi-cell cs-lokasi-cell-week">
+                          <span className="cs-lokasi-cell-label">Week</span>
+                          <span className="cs-week-badge">
+                            {formatWhsWeek(loc.whsweek)}
+                          </span>
+                          {loc.whsweek_termuda && (
+                            <span className="cs-week-mixed">
+                              s/d {formatWhsWeek(loc.whsweek_termuda)}
+                            </span>
+                          )}
+                        </div>
+
                         <div className="cs-lokasi-cell cs-lokasi-cell-rak">
                           <span className="cs-lokasi-cell-label">
                             <Layers size={13} /> Rak
@@ -429,6 +441,18 @@ export default function ControlStock() {
                           >
                             {loc.loccol}
                           </span>
+                        </div>
+
+                        <div className="cs-lokasi-cell cs-lokasi-cell-week">
+                          <span className="cs-lokasi-cell-label">Week</span>
+                          <span className="cs-week-badge">
+                            {formatWhsWeek(loc.whsweek)}
+                          </span>
+                          {loc.whsweek_termuda && (
+                            <span className="cs-week-mixed">
+                              s/d {formatWhsWeek(loc.whsweek_termuda)}
+                            </span>
+                          )}
                         </div>
 
                         <div className="cs-lokasi-cell cs-lokasi-cell-rak">
@@ -543,7 +567,7 @@ const csStyles = `
 
 .cs-lokasi-list { display: flex; flex-direction: column; gap: 8px; }
 .cs-lokasi-row-wrap { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
-.cs-lokasi-row { display: grid; grid-template-columns: 34px 1.5fr 0.9fr 0.9fr; align-items: center; gap: 10px; width: 100%; border: none; background: transparent; padding: 10px 14px; cursor: pointer; font: inherit; color: inherit; text-align: left; appearance: none; }
+.cs-lokasi-row { display: grid; grid-template-columns: 34px 1.4fr 1fr 0.7fr 0.9fr; align-items: center; gap: 10px; width: 100%; border: none; background: transparent; padding: 10px 14px; cursor: pointer; font: inherit; color: inherit; text-align: left; appearance: none; }
 .cs-lokasi-row-static { cursor: default; }
 .cs-lokasi-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .cs-lokasi-cell-label { display: none; }
@@ -568,6 +592,7 @@ const csStyles = `
 .cs-filter-btn-active.cs-filter-btn-oe { color: #92400e; }
 
 .cs-week-badge { display: inline-block; background: #eef2ff; color: #4338ca; font-weight: 700; font-size: 12px; padding: 3px 10px; border-radius: 999px; }
+.cs-week-mixed { font-size: 10px; color: #94a3b8; margin-top: 1px; }
 
 .cs-lokasi-cell-rak span:last-child { font-weight: 700; color: #334155; font-size: 13px; }
 .cs-rack-toggle { display: inline-flex; align-items: center; gap: 4px; }

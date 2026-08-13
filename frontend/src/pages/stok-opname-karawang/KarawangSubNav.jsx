@@ -1,6 +1,13 @@
 // src/pages/stok-opname-karawang/KarawangSubNav.jsx
 import { Link, useLocation } from "react-router-dom";
-import { ScanLine, LayoutDashboard, Home, Barcode, Boxes } from "lucide-react";
+import {
+  ScanLine,
+  LayoutDashboard,
+  Home,
+  Barcode,
+  Boxes,
+  ArrowLeftRight,
+} from "lucide-react";
 
 export default function KarawangSubNav() {
   const location = useLocation();
@@ -16,6 +23,11 @@ export default function KarawangSubNav() {
       to: "/karawang/cross-docking",
       label: "Cross Docking",
       icon: <Boxes size={15} />,
+    },
+    {
+      to: "/karawang/transfer-plan",
+      label: "Transfer Plan",
+      icon: <ArrowLeftRight size={15} />,
     },
   ];
   return (

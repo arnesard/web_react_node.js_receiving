@@ -1,555 +1,269 @@
-// src/pages/stok-opname-karawang/CrossDockingPage.jsx
-// "Mirror" halaman Monitoring Stock Cross Docking (web FGINVC terpisah),
-// datanya ditarik lewat backend Karawang yang jadi proxy ke API Cross
-// Docking (login + Bearer token, lihat backend/src/services/crossDockingClient.js).
-// Kolom tabel & kartu total dirender dinamis dari field apapun yang
-// dibalikin API-nya, biar gak perlu tau persis nama field di sana.
-import { useState } from "react";
-import { Link } from "react-router-dom";
+// src/pages/stok-opname-karawang/TransferPlanPage.jsx
+// "Transfer Plan" = barang pindah Tangerang -> Karawang.
+// "Retur"         = barang pindah Karawang -> Tangerang.
+// Langsung tercatat pas disubmit (TANPA alur approval) — kalau salah
+// input, dihapus aja lewat tombol "Hapus" di baris histori.
+//
+// Cross Docking di halaman ini CUMA dipakai read-only: pas item dipilih
+// dari autocomplete, ditarik info "stok saat ini di Karawang" (qty +
+// jumlah lot) sekadar referensi buat operator — TIDAK pernah nulis/update
+// apapun ke Cross Docking. Kalau gagal ditarik (mis. API lagi down), form
+// tetap bisa disubmit seperti biasa, cuma info referensinya yang gak ada.
+import { useState, useEffect, useRef } from "react";
+import Swal from "sweetalert2";
 import {
-  RefreshCw,
+  Search,
   Loader2,
-  Download,
-  Layers,
-  Printer,
-  X,
-  ArrowDownWideNarrow,
+  ArrowRight,
+  ArrowLeft,
+  Trash2,
+  User,
+  Boxes,
 } from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
 import { karawangStyles } from "./karawangStyles";
 
-const VIEW_MODES = [
-  { value: "byRack", label: "by Rack" },
-  { value: "byItem", label: "by Item" },
+const KARYAWAN_SESSION_KEY = "karawang_karyawan";
+
+const JENIS_OPTIONS = [
+  {
+    value: "TRANSFER",
+    label: "Transfer",
+    sub: "Tangerang → Karawang",
+    icon: ArrowRight,
+  },
+  {
+    value: "RETUR",
+    label: "Retur",
+    sub: "Karawang → Tangerang",
+    icon: ArrowLeft,
+  },
 ];
 
-const FILTER_MODES = [
-  { value: "all", label: "All" },
-  { value: "hold", label: "Holds" },
-  { value: "oe", label: "OE" },
+const FILTER_JENIS = [
+  { value: "", label: "Semua" },
+  { value: "TRANSFER", label: "Transfer" },
+  { value: "RETUR", label: "Retur" },
 ];
 
-const STAT_COLORS = [
-  "blue",
-  "blue",
-  "blue",
-  "blue",
-  "amber",
-  "orange",
-  "red",
-  "red",
-];
-
-// Batas jumlah baris yang beneran di-render ke <table>. Query tanpa filter
-// (mis. Detail All pas checkbox "Detail" dicentang tanpa filter lain) bisa
-// balikin puluhan ribu baris — nge-render semuanya ke HTML table bikin
-// browser nge-hang/berasa "gak nampil apa-apa". CSV export tetap ambil
-// SEMUA baris (gak kepotong), cuma tampilan tabelnya yang dibatasi.
-const MAX_TABLE_RENDER_ROWS = 2000;
-
-// "totalHoldQc" / "TOTAL_HOLD_QC" -> "Total Hold Qc", biar enak dibaca
-// sebagai judul kolom/kartu apapun konvensi penamaan field dari API-nya.
-function humanizeKey(key) {
-  const spaced = String(key)
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .trim();
-  return spaced
-    .split(" ")
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(" ");
-}
-
-function formatCellValue(value) {
-  if (value === null || value === undefined || value === "") return "-";
-  if (typeof value === "number") return value.toLocaleString("id-ID");
-  return String(value);
-}
-
-// Union kolom dari beberapa baris pertama (bukan cuma baris pertama),
-// jaga-jaga kalau baris awal kebetulan gak punya semua field.
-function collectColumns(rows, sampleSize = 30) {
-  const columns = [];
-  const seen = new Set();
-  rows.slice(0, sampleSize).forEach((row) => {
-    Object.keys(row || {}).forEach((key) => {
-      if (!seen.has(key)) {
-        seen.add(key);
-        columns.push(key);
-      }
-    });
+function formatWaktu(iso) {
+  if (!iso) return "-";
+  return new Date(iso).toLocaleString("id-ID", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
   });
-  return columns;
 }
-
-// Ambil nilai field dari row biarpun casing/gaya penamaan field API-nya
-// beda dari yang kita tebak (rackcode / RACKCODE / rackCode / RackCode),
-// biar kolom "Detail All" yang formatnya udah dipatok gak gampang blank
-// gara-gara mismatch huruf besar-kecil doang.
-function getFieldValue(row, key) {
-  if (!row) return undefined;
-  if (row[key] !== undefined) return row[key];
-  const upper = key.toUpperCase();
-  if (row[upper] !== undefined) return row[upper];
-  const lower = key.toLowerCase();
-  if (row[lower] !== undefined) return row[lower];
-  const camel = key.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
-  if (row[camel] !== undefined) return row[camel];
-  const pascal = camel.charAt(0).toUpperCase() + camel.slice(1);
-  if (row[pascal] !== undefined) return row[pascal];
-  return undefined;
-}
-
-// Struktur kolom "Detail All" buat TAMPILAN WEB, dipatok manual (bukan
-// auto dari field API) biar sama persis kayak web Cross Docking aslinya:
-// Rackcode, Barcode, Item, Cur Week, Probcode, Judge, Location, lalu 4
-// kolom Hold (QC/QA/QAA/RND). TANPA Bc Collie — field itu gak ada di
-// respons /stock-cd/detail-all bawaan, dan nyari-in buat semua baris di
-// tabel web bakal lambat (di lapangan datanya bisa ribuan baris). Bc
-// Collie cuma ditarik pas Export CSV (lihat DETAIL_ALL_EXPORT_COLUMNS +
-// handleExportDetailAllCsv), bukan buat tampilan langsung.
-const DETAIL_ALL_COLUMNS = [
-  { key: "rackcode", label: "Rackcode" },
-  { key: "barcode", label: "Barcode" },
-  { key: "item", label: "Item" },
-  { key: "curweek", label: "Cur Week" },
-  { key: "probcode", label: "Probcode" },
-  { key: "jdge", label: "Judge" },
-  { key: "loccode", label: "Location" },
-  { key: "hold_reason1", label: "Hold QC" },
-  { key: "hold_reason2", label: "Hold QA" },
-  { key: "hold_reason3", label: "Hold QAA" },
-  { key: "hold_reason4", label: "Hold RND" },
-];
-
-// Sama kayak DETAIL_ALL_COLUMNS, tapi khusus buat CSV export: nyelipin
-// kolom Collie (field aslinya bc_collie) tepat setelah Barcode.
-const DETAIL_ALL_EXPORT_COLUMNS = [
-  { key: "rackcode", label: "Rackcode" },
-  { key: "barcode", label: "Barcode" },
-  { key: "bc_collie", label: "Collie" },
-  { key: "item", label: "Item" },
-  { key: "curweek", label: "Cur Week" },
-  { key: "probcode", label: "Probcode" },
-  { key: "jdge", label: "Judge" },
-  { key: "loccode", label: "Location" },
-  { key: "hold_reason1", label: "Hold QC" },
-  { key: "hold_reason2", label: "Hold QA" },
-  { key: "hold_reason3", label: "Hold QAA" },
-  { key: "hold_reason4", label: "Hold RND" },
-];
-
-function csvEscape(value) {
-  const text = String(value ?? "");
-  if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-  return text;
-}
-
-// `columns` opsional: kalau dikasih (array {key,label}), CSV-nya ikut
-// urutan & label itu (dipake buat Detail All). Kalau enggak, kolomnya
-// auto dari field yang ada di data (dipake buat Ringkasan/Summary).
-function downloadCsv(rows, filenamePrefix, columns) {
-  if (!rows || rows.length === 0) return;
-  const cols = columns ? columns.map((c) => c.key) : collectColumns(rows);
-  const headerRow = columns ? columns.map((c) => c.label) : cols;
-  const getValue = columns
-    ? (row, key) => getFieldValue(row, key)
-    : (row, key) => row[key];
-  const csv = [headerRow, ...rows.map((r) => cols.map((c) => getValue(r, c)))]
-    .map((row) => row.map(csvEscape).join(","))
-    .join("\r\n");
-  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${filenamePrefix}-${new Date().toISOString().slice(0, 10)}.csv`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-// Buka window baru berisi tabel HTML polos lalu langsung trigger dialog
-// print browser — dipake tombol "Print Stock" biar hasilnya rapi tanpa
-// ikut ke-print sidebar/filter/dll dari halaman utama.
-function printRows(rows, title) {
-  if (!rows || rows.length === 0) return;
-  const columns = collectColumns(rows);
-  const headHtml = columns.map((c) => `<th>${humanizeKey(c)}</th>`).join("");
-  const bodyHtml = rows
-    .map(
-      (row) =>
-        `<tr>${columns
-          .map((c) => `<td>${formatCellValue(row[c])}</td>`)
-          .join("")}</tr>`,
-    )
-    .join("");
-  const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8" />
-<title>${title}</title>
-<style>
-  body { font-family: Arial, sans-serif; padding: 16px; }
-  h1 { font-size: 16px; margin-bottom: 4px; }
-  p { font-size: 12px; color: #555; margin-top: 0; }
-  table { border-collapse: collapse; width: 100%; font-size: 12px; }
-  th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; }
-  th { background: #f0f0f0; }
-</style>
-</head>
-<body>
-  <h1>${title}</h1>
-  <p>Dicetak ${new Date().toLocaleString("id-ID")}</p>
-  <table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>
-</body></html>`;
-  const printWindow = window.open("", "_blank", "width=1000,height=700");
-  if (!printWindow) return;
-  printWindow.document.write(html);
-  printWindow.document.close();
-  printWindow.onload = () => {
-    printWindow.focus();
-    printWindow.print();
-  };
-}
-
-function DynamicTable({ rows, emptyMessage }) {
-  if (!rows || rows.length === 0) {
-    return <div className="ko-empty">{emptyMessage}</div>;
-  }
-  const truncated = rows.length > MAX_TABLE_RENDER_ROWS;
-  const visibleRows = truncated ? rows.slice(0, MAX_TABLE_RENDER_ROWS) : rows;
-  const columns = collectColumns(visibleRows);
-  return (
-    <>
-      {truncated && (
-        <div className="ko-cd-truncate-notice">
-          Menampilkan {MAX_TABLE_RENDER_ROWS.toLocaleString("id-ID")} dari{" "}
-          {rows.length.toLocaleString("id-ID")} baris (biar browser gak
-          nge-hang). Data lengkapnya tetep kebawa kalau lo klik Export CSV.
-        </div>
-      )}
-      <div className="ko-table-scroll">
-        <table className="ko-data-table">
-          <thead>
-            <tr>
-              {columns.map((col) => (
-                <th key={col}>{humanizeKey(col)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {visibleRows.map((row, idx) => (
-              <tr key={idx}>
-                {columns.map((col) => (
-                  <td
-                    key={col}
-                    className={
-                      typeof row[col] === "number" ? "ko-mono" : undefined
-                    }
-                  >
-                    {formatCellValue(row[col])}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </>
-  );
-}
-
-// Modal "Detail All" — nyontek tampilan web sumber: header biru gelap +
-// tombol close, Export CSV di pojok kanan atas, tabel dengan header sticky
-// & scroll internal sendiri (gak ikut scroll halaman penuh).
-function DetailAllModal({
-  rows,
-  loading,
-  note,
-  exporting,
-  onClose,
-  onExportCsv,
-}) {
-  const showTable = rows !== null && rows.length > 0;
-  const truncated = showTable && rows.length > MAX_TABLE_RENDER_ROWS;
-  const visibleRows = showTable
-    ? truncated
-      ? rows.slice(0, MAX_TABLE_RENDER_ROWS)
-      : rows
-    : [];
-
-  return (
-    <div className="ko-cd-modal-backdrop" onClick={onClose}>
-      <div className="ko-cd-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="ko-cd-modal-header">
-          <h2>Detail All</h2>
-          <button
-            type="button"
-            className="ko-cd-modal-close"
-            onClick={onClose}
-            aria-label="Tutup"
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="ko-cd-modal-body">
-          <div className="ko-cd-modal-toolbar">
-            <button
-              className="ko-btn-secondary ko-btn-download"
-              onClick={onExportCsv}
-              disabled={!showTable || exporting}
-              title="CSV yang di-download ikut menyertakan kolom Bc Collie"
-            >
-              {exporting ? (
-                <Loader2 size={16} className="ko-spin" />
-              ) : (
-                <Download size={16} />
-              )}
-              {exporting ? "Menyiapkan CSV..." : "Export CSV"}
-            </button>
-          </div>
-
-          {exporting && (
-            <div className="ko-cd-truncate-notice">
-              Lagi narik data Bc Collie buat semua baris — bisa makan waktu
-              beberapa menit kalau kombinasi rack/item-nya banyak. Jangan tutup
-              halaman ini dulu.
-            </div>
-          )}
-
-          {loading && (
-            <div className="ko-empty">
-              <Loader2 size={20} className="ko-spin" /> Memuat data detail...
-            </div>
-          )}
-
-          {!loading && note && (
-            <div className="ko-cd-truncate-notice">{note}</div>
-          )}
-
-          {!loading && truncated && (
-            <div className="ko-cd-truncate-notice">
-              Menampilkan {MAX_TABLE_RENDER_ROWS.toLocaleString("id-ID")} dari{" "}
-              {rows.length.toLocaleString("id-ID")} baris (biar browser gak
-              nge-hang). Data lengkapnya tetep kebawa kalau lo klik Export CSV.
-            </div>
-          )}
-
-          {!loading && !showTable && (
-            <div className="ko-empty">Tidak ada data detail.</div>
-          )}
-
-          {!loading && showTable && (
-            <div className="ko-cd-modal-table-scroll">
-              <table className="ko-data-table">
-                <thead>
-                  <tr>
-                    {DETAIL_ALL_COLUMNS.map((col) => (
-                      <th key={col.key}>{col.label}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleRows.map((row, idx) => (
-                    <tr key={idx}>
-                      {DETAIL_ALL_COLUMNS.map((col) => {
-                        const value = getFieldValue(row, col.key);
-                        return (
-                          <td
-                            key={col.key}
-                            className={
-                              typeof value === "number" ? "ko-mono" : undefined
-                            }
-                          >
-                            {formatCellValue(value)}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StatsGrid({ totals }) {
-  if (!totals) return null;
-  const entries = Object.entries(totals).filter(
-    ([, v]) => typeof v === "number" || typeof v === "string",
-  );
-  if (!entries.length) return null;
-  return (
-    <div className="ko-cd-stats-grid">
-      {entries.map(([key, value], idx) => (
-        <div
-          key={key}
-          className={`ko-cd-stat-card ko-cd-stat-${STAT_COLORS[idx % STAT_COLORS.length]}`}
-        >
-          <span className="ko-cd-stat-label">{humanizeKey(key)}</span>
-          <strong className="ko-cd-stat-value">{formatCellValue(value)}</strong>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const EMPTY_FILTERS = {
-  item: "",
-  rackcode: "",
-  barcode: "",
-  weekFrom: "",
-  weekTo: "",
-};
 
 export default function TransferPlanPage() {
-  const [filters, setFilters] = useState(EMPTY_FILTERS);
-  const [viewMode, setViewMode] = useState("byRack");
-  const [filterMode, setFilterMode] = useState("all");
-  const [detailChecked, setDetailChecked] = useState(false);
+  // Karyawan yang lagi input — sharing sessionStorage key yang sama kayak
+  // halaman Scan, biar kalau udah pernah pilih nama di sana, di sini juga
+  // otomatis kepilih, gak perlu input ulang.
+  const [karyawan, setKaryawan] = useState(() => {
+    const saved = sessionStorage.getItem(KARYAWAN_SESSION_KEY);
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [employees, setEmployees] = useState([]);
+  const [karyawanSearch, setKaryawanSearch] = useState("");
+  const [showKaryawanDropdown, setShowKaryawanDropdown] = useState(false);
 
-  const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState("");
-  const [summaryRows, setSummaryRows] = useState([]);
-  const [totals, setTotals] = useState(null);
+  // Form
+  const [jenis, setJenis] = useState("TRANSFER");
+  const [itemKeyword, setItemKeyword] = useState("");
+  const [itemSuggestions, setItemSuggestions] = useState([]);
+  const [showItemSuggest, setShowItemSuggest] = useState(false);
+  const [searchingItem, setSearchingItem] = useState(false);
+  const [selectedItem, setSelectedItem] = useState(null); // {item, deskripsi}
+  const [stockInfo, setStockInfo] = useState(null); // {total_qty, total_lot} | null
+  const [loadingStockInfo, setLoadingStockInfo] = useState(false);
+  const [qty, setQty] = useState("");
+  const [keterangan, setKeterangan] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailRows, setDetailRows] = useState(null); // null = belum pernah diminta
-  const [detailNote, setDetailNote] = useState(""); // info non-fatal, mis. Bc Collie dilewati
-  const [showDetailModal, setShowDetailModal] = useState(false);
-  const [exportingCsv, setExportingCsv] = useState(false);
+  const itemDebounceRef = useRef(null);
+  const itemBoxRef = useRef(null);
 
-  const setFilterField = (key) => (e) =>
-    setFilters((prev) => ({ ...prev, [key]: e.target.value }));
+  // Histori
+  const [filterJenis, setFilterJenis] = useState("");
+  const [rows, setRows] = useState([]);
+  const [loadingRows, setLoadingRows] = useState(true);
 
-  // Minimal isi satu filter (Item / Rackcode / Barcode / Week) sebelum
-  // boleh narik data — query tanpa filter terlalu berat buat server sumber.
-  const hasAnyFilter =
-    filters.item.trim() !== "" ||
-    filters.rackcode.trim() !== "" ||
-    filters.barcode.trim() !== "" ||
-    filters.weekFrom.trim() !== "" ||
-    filters.weekTo.trim() !== "";
+  const loadHistori = async (jenisFilter) => {
+    setLoadingRows(true);
+    try {
+      const res = await api.get("/stok-opname-karawang/transfer-plan", {
+        params: jenisFilter ? { jenis: jenisFilter } : {},
+      });
+      setRows(res.data?.data || []);
+    } catch (err) {
+      Swal.fire(
+        "Gagal memuat histori",
+        err.response?.data?.message || err.message,
+        "error",
+      );
+    } finally {
+      setLoadingRows(false);
+    }
+  };
 
-  const queryParams = () => ({
-    item: filters.item.trim() || undefined,
-    rackcode: filters.rackcode.trim() || undefined,
-    barcode: filters.barcode.trim() || undefined,
-    weekFrom: filters.weekFrom.trim() || undefined,
-    weekTo: filters.weekTo.trim() || undefined,
-    filterMode,
-    detail: detailChecked ? "true" : undefined,
+  useEffect(() => {
+    loadHistori(filterJenis);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterJenis]);
+
+  useEffect(() => {
+    if (!karyawan) {
+      api
+        .get("/employees")
+        .then((res) => setEmployees(res.data.data || []))
+        .catch(() => setEmployees([]));
+    }
+  }, [karyawan]);
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (itemBoxRef.current && !itemBoxRef.current.contains(e.target)) {
+        setShowItemSuggest(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Autocomplete item (debounce 350ms) — direset tiap kali item yang
+  // udah dipilih dibatalkan/diganti (ketik ulang setelah pilih).
+  useEffect(() => {
+    if (itemDebounceRef.current) clearTimeout(itemDebounceRef.current);
+    const kw = itemKeyword.trim();
+    if (!kw || selectedItem) {
+      setItemSuggestions([]);
+      return;
+    }
+    setSearchingItem(true);
+    itemDebounceRef.current = setTimeout(() => {
+      api
+        .get("/stok-opname-karawang/transfer-plan/search-item", {
+          params: { keyword: kw },
+        })
+        .then((res) => setItemSuggestions(res.data?.data || []))
+        .catch(() => setItemSuggestions([]))
+        .finally(() => setSearchingItem(false));
+    }, 350);
+    return () => clearTimeout(itemDebounceRef.current);
+  }, [itemKeyword, selectedItem]);
+
+  const pickItem = (it) => {
+    setSelectedItem(it);
+    setItemKeyword(`${it.item} — ${it.deskripsi}`);
+    setShowItemSuggest(false);
+    setStockInfo(null);
+    setLoadingStockInfo(true);
+    api
+      .get("/stok-opname-karawang/transfer-plan/stock-info", {
+        params: { item: it.item },
+      })
+      .then((res) => setStockInfo(res.data?.data || null))
+      .catch(() => setStockInfo(null)) // gagal ambil info stok bukan blocker, form tetap jalan
+      .finally(() => setLoadingStockInfo(false));
+  };
+
+  const resetItemSelection = () => {
+    setSelectedItem(null);
+    setItemKeyword("");
+    setStockInfo(null);
+  };
+
+  const selectKaryawan = (emp) => {
+    const data = { id: emp.id, employee_id: emp.employee_id, name: emp.name };
+    sessionStorage.setItem(KARYAWAN_SESSION_KEY, JSON.stringify(data));
+    setKaryawan(data);
+    setKaryawanSearch("");
+    setShowKaryawanDropdown(false);
+  };
+
+  const handleGantiKaryawan = () => {
+    sessionStorage.removeItem(KARYAWAN_SESSION_KEY);
+    setKaryawan(null);
+  };
+
+  const filteredEmployees = employees.filter((emp) => {
+    const q = karyawanSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (emp.name || "").toLowerCase().includes(q) ||
+      (emp.employee_id || "").toLowerCase().includes(q)
+    );
   });
 
-  const handleRefresh = async () => {
-    setLoading(true);
-    setError("");
-    setDetailRows(null); // filter berubah, detail all lama udah gak nyambung
+  const resetForm = () => {
+    resetItemSelection();
+    setQty("");
+    setKeterangan("");
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedItem) {
+      Swal.fire("Belum lengkap", "Pilih item dari daftar dulu.", "warning");
+      return;
+    }
+    const qtyNum = Number(qty);
+    if (!qtyNum || qtyNum <= 0) {
+      Swal.fire("Belum lengkap", "Qty harus diisi angka > 0.", "warning");
+      return;
+    }
+
+    setSubmitting(true);
     try {
-      const [summaryRes, totalsRes] = await Promise.all([
-        api.get("/stok-opname-karawang/cross-docking/summary", {
-          params: { viewMode, ...queryParams() },
-        }),
-        api.get("/stok-opname-karawang/cross-docking/totals", {
-          params: queryParams(),
-        }),
-      ]);
-      setSummaryRows(summaryRes.data?.data || []);
-      setTotals(totalsRes.data?.data || null);
-      setLoaded(true);
+      await api.post("/stok-opname-karawang/transfer-plan", {
+        jenis,
+        item: selectedItem.item,
+        qty: qtyNum,
+        keterangan: keterangan.trim() || undefined,
+        id_karyawan: karyawan?.id,
+      });
+      Swal.fire({
+        icon: "success",
+        title:
+          jenis === "TRANSFER"
+            ? "Transfer berhasil dicatat"
+            : "Retur berhasil dicatat",
+        timer: 1500,
+        showConfirmButton: false,
+      });
+      resetForm();
+      loadHistori(filterJenis);
     } catch (err) {
-      setError(
-        err.response?.data?.message ||
-          "Gagal mengambil data dari Cross Docking. Cek koneksi jaringan / kredensial CROSS_DOCKING_* di backend.",
+      Swal.fire(
+        "Gagal menyimpan",
+        err.response?.data?.message || err.message,
+        "error",
       );
-      setSummaryRows([]);
-      setTotals(null);
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
-  const handleLoadDetailAll = async () => {
-    // Detail All boleh jalan tanpa filter KALAU checkbox "Detail" dicentang
-    // (pengecualian) — di luar itu tetep wajib isi minimal satu filter.
-    if (!detailChecked && !hasAnyFilter) {
-      setError(
-        'Minimal isi satu filter (Item / Rackcode / Barcode / Week), atau centang "Detail" dulu sebelum menarik Detail All.',
-      );
-      return;
-    }
-    setError("");
-    setDetailNote("");
-    setShowDetailModal(true); // buka modal duluan, isinya nyusul (loading state)
-    setDetailLoading(true);
-    try {
-      const res = await api.get(
-        "/stok-opname-karawang/cross-docking/detail-all",
-        {
-          params: queryParams(),
-        },
-      );
-      setDetailRows(res.data?.data || []);
-    } catch (err) {
-      setShowDetailModal(false);
-      setError(
-        err.response?.data?.message || "Gagal mengambil data Detail All.",
-      );
-    } finally {
-      setDetailLoading(false);
-    }
-  };
+  const handleHapus = async (row) => {
+    const confirm = await Swal.fire({
+      icon: "warning",
+      title: "Hapus data ini?",
+      html: `${row.jenis === "TRANSFER" ? "Transfer" : "Retur"} <b>${row.item}</b> qty ${row.qty} akan dihapus dari histori.`,
+      showCancelButton: true,
+      confirmButtonText: "Ya, hapus",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#dc2626",
+    });
+    if (!confirm.isConfirmed) return;
 
-  // Export CSV Detail All: fetch ULANG dari endpoint export khusus (bukan
-  // pake detailRows yang lagi tampil di tabel), soalnya di endpoint ini
-  // bc_collie di-enrich buat SEMUA baris tanpa batas jumlah kombinasi —
-  // bisa makan waktu lumayan lama kalau datanya ribuan baris, makanya
-  // dipisah dari tampilan tabel biar tabelnya sendiri tetep cepat.
-  const handleExportDetailAllCsv = async () => {
-    if (!detailChecked && !hasAnyFilter) {
-      setError(
-        'Minimal isi satu filter (Item / Rackcode / Barcode / Week), atau centang "Detail" dulu sebelum export.',
-      );
-      return;
-    }
-    setError("");
-    setExportingCsv(true);
     try {
-      const res = await api.get(
-        "/stok-opname-karawang/cross-docking/detail-all-export",
-        {
-          params: queryParams(),
-          timeout: 5 * 60 * 1000, // 5 menit — bisa lama kalau kombinasi rack+item banyak
-        },
-      );
-      const exportRows = res.data?.data || [];
-      const meta = res.data?.meta;
-      downloadCsv(
-        exportRows,
-        "cross-docking-detail-all",
-        DETAIL_ALL_EXPORT_COLUMNS,
-      );
-      if (
-        meta &&
-        meta.bcCollieEnriched === false &&
-        meta.bcCollieSkippedReason
-      ) {
-        setDetailNote(meta.bcCollieSkippedReason);
-      }
+      await api.delete(`/stok-opname-karawang/transfer-plan/${row.id}`);
+      setRows((prev) => prev.filter((r) => r.id !== row.id));
     } catch (err) {
-      setError(
-        err.response?.data?.message ||
-          "Gagal menyiapkan file CSV (termasuk Bc Collie). Coba lagi, atau persempit filter kalau datanya kebanyakan.",
-      );
-    } finally {
-      setExportingCsv(false);
+      Swal.fire("Gagal hapus", err.response?.data?.message || err.message, "error");
     }
   };
 
@@ -558,13 +272,329 @@ export default function TransferPlanPage() {
       <style>{karawangStyles}</style>
       <KarawangSubNav />
 
-      <div className="ko-cd-title-row">
-        <div className="ko-header">
-          <h1>Transfer Plan</h1>
-          <p>
-            Form input transaksi transfer dan retur barang antar lokasi gudang.
-          </p>
+      <div className="ko-header">
+        <h1>Transfer Plan</h1>
+        <p>
+          Catat transaksi <strong>Transfer</strong> (Tangerang → Karawang)
+          dan <strong>Retur</strong> (Karawang → Tangerang) antar gudang.
+        </p>
+      </div>
+
+      {/* Karyawan yang lagi input */}
+      {!karyawan ? (
+        <div className="ko-card" style={{ position: "relative" }}>
+          <label className="ko-field-label">
+            <User size={12} style={{ verticalAlign: -2 }} /> Input ID
+            Karyawan
+          </label>
+          <input
+            type="text"
+            className="ko-text-input"
+            placeholder="Ketik nama atau ID karyawan..."
+            autoComplete="off"
+            value={karyawanSearch}
+            onChange={(e) => {
+              setKaryawanSearch(e.target.value);
+              setShowKaryawanDropdown(true);
+            }}
+            onFocus={() => setShowKaryawanDropdown(true)}
+          />
+          {showKaryawanDropdown && (
+            <div className="ko-dropdown" style={{ top: "auto" }}>
+              {filteredEmployees.length === 0 ? (
+                <div className="ko-dropdown-empty">Tidak ditemukan</div>
+              ) : (
+                filteredEmployees.slice(0, 30).map((emp) => (
+                  <div
+                    key={emp.id}
+                    className="ko-dropdown-item"
+                    onMouseDown={() => selectKaryawan(emp)}
+                  >
+                    <span className="ko-dropdown-id">{emp.employee_id}</span>
+                    <span className="ko-dropdown-name">{emp.name}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
+      ) : (
+        <>
+          <div
+            className="ko-batch-badge"
+            style={{ marginBottom: 12, display: "inline-flex" }}
+          >
+            <User size={13} /> {karyawan.name} ({karyawan.employee_id})
+            <button
+              type="button"
+              className="ko-btn-ganti"
+              style={{ marginLeft: 8 }}
+              onClick={handleGantiKaryawan}
+            >
+              Ganti
+            </button>
+          </div>
+
+          {/* Form input transaksi */}
+          <form className="ko-card" onSubmit={handleSubmit}>
+            <div className="ko-radio-group" style={{ marginBottom: 16 }}>
+              {JENIS_OPTIONS.map((opt) => {
+                const Icon = opt.icon;
+                const active = jenis === opt.value;
+                return (
+                  <label
+                    key={opt.value}
+                    className="ko-radio-option"
+                    style={
+                      active
+                        ? { fontWeight: 700, color: "#0021b3" }
+                        : undefined
+                    }
+                  >
+                    <input
+                      type="radio"
+                      name="jenis"
+                      checked={active}
+                      onChange={() => setJenis(opt.value)}
+                    />
+                    <Icon size={14} style={{ verticalAlign: -2 }} />{" "}
+                    {opt.label}{" "}
+                    <span style={{ color: "#94a3b8", fontWeight: 400 }}>
+                      ({opt.sub})
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div ref={itemBoxRef} style={{ position: "relative", marginBottom: 14 }}>
+              <label className="ko-field-label">Item</label>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Search size={16} style={{ color: "#94a3b8", flexShrink: 0 }} />
+                <input
+                  type="text"
+                  className="ko-text-input"
+                  placeholder="Ketik kode item atau deskripsi..."
+                  value={itemKeyword}
+                  onChange={(e) => {
+                    setItemKeyword(e.target.value);
+                    setSelectedItem(null);
+                    setStockInfo(null);
+                    setShowItemSuggest(true);
+                  }}
+                  onFocus={() => setShowItemSuggest(true)}
+                />
+              </div>
+
+              {showItemSuggest && itemKeyword.trim() && !selectedItem && (
+                <div className="ko-dropdown" style={{ top: "100%", marginTop: 2 }}>
+                  {searchingItem && (
+                    <div className="ko-dropdown-empty">
+                      <Loader2 size={14} className="ko-spin" /> Mencari...
+                    </div>
+                  )}
+                  {!searchingItem && itemSuggestions.length === 0 && (
+                    <div className="ko-dropdown-empty">Item tidak ditemukan.</div>
+                  )}
+                  {!searchingItem &&
+                    itemSuggestions.map((s) => (
+                      <div
+                        key={s.item}
+                        className="ko-dropdown-item"
+                        onMouseDown={() => pickItem(s)}
+                      >
+                        <span className="ko-dropdown-id">{s.item}</span>
+                        <span className="ko-dropdown-name">{s.deskripsi}</span>
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              {selectedItem && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    fontSize: 12.5,
+                  }}
+                >
+                  <span style={{ color: "#64748b" }}>
+                    {loadingStockInfo ? (
+                      <>
+                        <Loader2
+                          size={12}
+                          className="ko-spin"
+                          style={{ verticalAlign: -1 }}
+                        />{" "}
+                        Mengecek stok Karawang di Cross Docking...
+                      </>
+                    ) : stockInfo ? (
+                      <>
+                        <Boxes
+                          size={12}
+                          style={{ verticalAlign: -1, marginRight: 3 }}
+                        />
+                        Stok Karawang saat ini (Cross Docking):{" "}
+                        <strong>{stockInfo.total_qty}</strong> qty di{" "}
+                        {stockInfo.total_lot} lot
+                      </>
+                    ) : (
+                      "Info stok Cross Docking gak tersedia — form tetap bisa disubmit."
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="ko-btn-ganti"
+                    onClick={resetItemSelection}
+                  >
+                    Ganti Item
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "160px 1fr",
+                gap: 14,
+                marginBottom: 14,
+              }}
+            >
+              <div>
+                <label className="ko-field-label">Qty</label>
+                <input
+                  type="number"
+                  min="1"
+                  className="ko-text-input"
+                  placeholder="0"
+                  value={qty}
+                  onChange={(e) => setQty(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="ko-field-label">Keterangan (opsional)</label>
+                <input
+                  type="text"
+                  className="ko-text-input"
+                  placeholder="Catatan tambahan..."
+                  value={keterangan}
+                  onChange={(e) => setKeterangan(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="ko-btn-primary"
+              disabled={submitting}
+              style={{ width: "auto", padding: "10px 24px" }}
+            >
+              {submitting ? (
+                <Loader2 size={16} className="ko-spin" />
+              ) : jenis === "TRANSFER" ? (
+                <ArrowRight size={16} />
+              ) : (
+                <ArrowLeft size={16} />
+              )}
+              Catat {jenis === "TRANSFER" ? "Transfer" : "Retur"}
+            </button>
+          </form>
+        </>
+      )}
+
+      {/* Histori */}
+      <div className="ko-cd-title-row" style={{ marginTop: 22 }}>
+        <div className="ko-header" style={{ marginBottom: 0 }}>
+          <h1 style={{ fontSize: 16 }}>Histori Transfer &amp; Retur</h1>
+        </div>
+        <div className="ko-radio-group">
+          {FILTER_JENIS.map((opt) => (
+            <label key={opt.value || "all"} className="ko-radio-option">
+              <input
+                type="radio"
+                name="filterJenis"
+                checked={filterJenis === opt.value}
+                onChange={() => setFilterJenis(opt.value)}
+              />
+              {opt.label}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="ko-card">
+        {loadingRows && (
+          <div className="ko-empty">
+            <Loader2 size={18} className="ko-spin" /> Memuat histori...
+          </div>
+        )}
+
+        {!loadingRows && rows.length === 0 && (
+          <div className="ko-empty">Belum ada transaksi tercatat.</div>
+        )}
+
+        {!loadingRows && rows.length > 0 && (
+          <div className="ko-table-scroll">
+            <table className="ko-data-table">
+              <thead>
+                <tr>
+                  <th>Waktu</th>
+                  <th>Jenis</th>
+                  <th>Item</th>
+                  <th>Deskripsi</th>
+                  <th>Qty</th>
+                  <th>Keterangan</th>
+                  <th>PIC</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id}>
+                    <td>{formatWaktu(row.created_at)}</td>
+                    <td>
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          fontWeight: 700,
+                          color: row.jenis === "TRANSFER" ? "#0021b3" : "#b45309",
+                        }}
+                      >
+                        {row.jenis === "TRANSFER" ? (
+                          <ArrowRight size={13} />
+                        ) : (
+                          <ArrowLeft size={13} />
+                        )}
+                        {row.jenis === "TRANSFER" ? "Transfer" : "Retur"}
+                      </span>
+                    </td>
+                    <td className="ko-mono">{row.item}</td>
+                    <td>{row.deskripsi || "-"}</td>
+                    <td className="ko-mono">{row.qty}</td>
+                    <td>{row.keterangan || "-"}</td>
+                    <td>{row.nama_karyawan || "-"}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="ko-scan-batal"
+                        onClick={() => handleHapus(row)}
+                        title="Hapus"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

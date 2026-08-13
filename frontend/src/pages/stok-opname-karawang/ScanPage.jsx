@@ -1,8 +1,9 @@
 // src/pages/stok-opname-karawang/ScanPage.jsx
-// Alur (gak ada lagi step upload sama sekali — batch aktif dibikin
-// otomatis di backend): (1) input ID karyawan sekali di awal sesi
-// (kesimpen di sessionStorage, gak perlu diulang tiap ganti lokasi) → (2)
-// ketik/scan lokasi (loccol), DIVALIDASI LIVE ke Cross Docking lewat
+// Alur (gak ada lagi step upload sama sekali, DAN gak ada lagi konsep
+// "batch"/sesi opname — semua data scan nyambung terus, langsung bisa
+// mulai begitu halaman ini dibuka): (1) input ID karyawan sekali di awal
+// sesi (kesimpen di sessionStorage, gak perlu diulang tiap ganti lokasi)
+// → (2) ketik/scan lokasi (loccol), DIVALIDASI LIVE ke Cross Docking lewat
 // endpoint /validasi-lokasi (pakai snapshot cache terakhir, lihat
 // KarawangController.validasiLokasi) — notif sukses/gagal muncul di sini,
 // baru lanjut kalau lolos → (3) scan RAK (Enter), divalidasi LIVE lagi ke
@@ -48,8 +49,6 @@ const toastSuccess = (message) =>
 export default function KarawangScanPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [batch, setBatch] = useState(null);
-  const [loadingBatch, setLoadingBatch] = useState(true);
   const [refreshingCd, setRefreshingCd] = useState(false);
   const [loadingEditRak, setLoadingEditRak] = useState(false);
 
@@ -87,14 +86,6 @@ export default function KarawangScanPage() {
   const rakInputRef = useRef(null);
   const collieInputRef = useRef(null);
 
-  useEffect(() => {
-    api
-      .get("/stok-opname-karawang/batches/active")
-      .then((res) => setBatch(res.data.data))
-      .catch(() => setBatch(null))
-      .finally(() => setLoadingBatch(false));
-  }, []);
-
   // Datang dari tombol "Edit" di modal Dashboard (bawa { rackcode, loccol }
   // lewat navigate state) → langsung set lokasi & tarik ulang detail rak
   // itu LIVE (skip step pilih lokasi & scan rak manual), biar operator
@@ -103,7 +94,7 @@ export default function KarawangScanPage() {
   // kalau halaman ini di-refresh atau dikunjungi lagi tanpa maksud edit.
   useEffect(() => {
     const editRak = location.state?.editRak;
-    if (!editRak || !batch) return;
+    if (!editRak) return;
     navigate(location.pathname, { replace: true, state: {} });
 
     setLoadingEditRak(true);
@@ -111,7 +102,6 @@ export default function KarawangScanPage() {
     setCurrentRak(null);
     api
       .post("/stok-opname-karawang/scan-rak", {
-        batch_id: batch.id,
         rackcode: editRak.rackcode,
         loccol: editRak.loccol,
       })
@@ -128,7 +118,7 @@ export default function KarawangScanPage() {
       })
       .finally(() => setLoadingEditRak(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batch, location.state]);
+  }, [location.state]);
 
   useEffect(() => {
     if (!karyawan) {
@@ -235,7 +225,6 @@ export default function KarawangScanPage() {
     setRakValue("");
     try {
       const res = await api.post("/stok-opname-karawang/scan-rak", {
-        batch_id: batch.id,
         rackcode: kode,
         loccol,
       });
@@ -266,7 +255,6 @@ export default function KarawangScanPage() {
     setCollieValue("");
     try {
       const res = await api.post("/stok-opname-karawang/scan-collie", {
-        batch_id: batch.id,
         rackcode: currentRak.rackcode,
         collie: kode,
         id_karyawan: karyawan.id,
@@ -309,7 +297,6 @@ export default function KarawangScanPage() {
   const handleBatal = async (collie) => {
     try {
       await api.post("/stok-opname-karawang/scan-collie/cancel", {
-        batch_id: batch.id,
         collie,
       });
       setCurrentRak((prev) => {
@@ -344,11 +331,11 @@ export default function KarawangScanPage() {
   // pindah ke Dashboard dulu kalau lokasi/rak-nya belum kevalidasi karena
   // datanya belum pernah/lama ditarik.
   const handleRefreshCrossDocking = async () => {
-    if (!batch || refreshingCd) return;
+    if (refreshingCd) return;
     setRefreshingCd(true);
     try {
       const res = await api.get("/stok-opname-karawang/dashboard/full", {
-        params: { batch_id: batch.id, refresh: true },
+        params: { refresh: true },
       });
       const fetchedAt = res.data?.data?.fetched_at;
       Swal.fire({
@@ -381,236 +368,219 @@ export default function KarawangScanPage() {
           <h1>Scan Stok Opname DC Karawang</h1>
           <p>Input karyawan &amp; lokasi dulu, baru scan rak lalu collie.</p>
         </div>
-        {!loadingBatch && batch && (
-          <button
-            type="button"
-            className="ko-btn-secondary"
-            onClick={handleRefreshCrossDocking}
-            disabled={refreshingCd}
-          >
-            {refreshingCd ? (
-              <Loader2 size={13} className="ko-spin" />
-            ) : (
-              <RefreshCw size={13} />
-            )}
-            Refresh Data Cross Docking
-          </button>
-        )}
+        <button
+          type="button"
+          className="ko-btn-secondary"
+          onClick={handleRefreshCrossDocking}
+          disabled={refreshingCd}
+        >
+          {refreshingCd ? (
+            <Loader2 size={13} className="ko-spin" />
+          ) : (
+            <RefreshCw size={13} />
+          )}
+          Refresh Data Cross Docking
+        </button>
       </div>
 
-      {loadingBatch && <div className="ko-empty">Memuat data batch...</div>}
-
-      {!loadingBatch && !batch && (
-        <div className="ko-empty">
-          Gagal memuat sesi opname. Coba refresh halaman, atau hubungi IT kalau
-          terus gagal.
-        </div>
-      )}
-
-      {!loadingBatch && batch && (
-        <>
-          {/* Step 1: Karyawan */}
-          {!karyawan && (
-            <div className="ko-card" style={{ position: "relative" }}>
-              <div className="ko-scan-label">
-                <User size={12} style={{ verticalAlign: -2 }} /> Input ID
-                Karyawan
-              </div>
-              <input
-                ref={karyawanInputRef}
-                type="text"
-                className="ko-text-input"
-                placeholder="Ketik nama atau ID karyawan..."
-                autoComplete="off"
-                value={karyawanSearch}
-                onChange={(e) => {
-                  setKaryawanSearch(e.target.value);
-                  setShowKaryawanDropdown(true);
-                }}
-                onFocus={() => setShowKaryawanDropdown(true)}
-              />
-              {showKaryawanDropdown && (
-                <div className="ko-dropdown">
-                  {filteredEmployees.length === 0 ? (
-                    <div className="ko-dropdown-empty">Tidak ditemukan</div>
-                  ) : (
-                    filteredEmployees.slice(0, 30).map((emp) => (
-                      <div
-                        key={emp.id}
-                        className="ko-dropdown-item"
-                        onMouseDown={() => selectKaryawan(emp)}
-                      >
-                        <span className="ko-dropdown-id">
-                          {emp.employee_id}
-                        </span>
-                        <span className="ko-dropdown-name">{emp.name}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
+      {/* Step 1: Karyawan */}
+      {!karyawan && (
+        <div className="ko-card" style={{ position: "relative" }}>
+          <div className="ko-scan-label">
+            <User size={12} style={{ verticalAlign: -2 }} /> Input ID
+            Karyawan
+          </div>
+          <input
+            ref={karyawanInputRef}
+            type="text"
+            className="ko-text-input"
+            placeholder="Ketik nama atau ID karyawan..."
+            autoComplete="off"
+            value={karyawanSearch}
+            onChange={(e) => {
+              setKaryawanSearch(e.target.value);
+              setShowKaryawanDropdown(true);
+            }}
+            onFocus={() => setShowKaryawanDropdown(true)}
+          />
+          {showKaryawanDropdown && (
+            <div className="ko-dropdown">
+              {filteredEmployees.length === 0 ? (
+                <div className="ko-dropdown-empty">Tidak ditemukan</div>
+              ) : (
+                filteredEmployees.slice(0, 30).map((emp) => (
+                  <div
+                    key={emp.id}
+                    className="ko-dropdown-item"
+                    onMouseDown={() => selectKaryawan(emp)}
+                  >
+                    <span className="ko-dropdown-id">{emp.employee_id}</span>
+                    <span className="ko-dropdown-name">{emp.name}</span>
+                  </div>
+                ))
               )}
             </div>
           )}
+        </div>
+      )}
 
-          {/* Step 2: Lokasi */}
-          {karyawan && !loccol && (
+      {/* Step 2: Lokasi */}
+      {karyawan && !loccol && (
+        <div className="ko-card">
+          <div className="ko-batch-badge" style={{ marginBottom: 12 }}>
+            <User size={13} /> {karyawan.name} ({karyawan.employee_id})
+            <button
+              className="ko-btn-ganti"
+              style={{ marginLeft: 8 }}
+              onClick={handleGantiKaryawan}
+            >
+              Ganti
+            </button>
+          </div>
+          <div className="ko-scan-label">
+            <MapPin size={12} style={{ verticalAlign: -2 }} /> Scan / Input
+            Lokasi
+          </div>
+          <input
+            ref={loccolInputRef}
+            type="text"
+            className="ko-scan-input"
+            placeholder={
+              validatingLokasi
+                ? "Memvalidasi ke Cross Docking..."
+                : "Scan / ketik kode lokasi lalu Enter..."
+            }
+            value={loccolInput}
+            onChange={(e) => setLoccolInput(e.target.value)}
+            onKeyDown={handleValidasiLokasi}
+            disabled={validatingLokasi}
+            autoFocus
+          />
+        </div>
+      )}
+
+      {/* Step 3: Rak & Collie */}
+      {karyawan && loccol && (
+        <>
+          <div className="ko-batch-badge" style={{ marginRight: 8 }}>
+            <User size={13} /> {karyawan.name}
+          </div>
+          <div className="ko-batch-badge">
+            <MapPin size={13} /> {loccol}
+            <button
+              className="ko-btn-ganti"
+              style={{ marginLeft: 8 }}
+              onClick={handleGantiLokasi}
+            >
+              Ganti Lokasi
+            </button>
+          </div>
+
+          {!currentRak && loadingEditRak && (
+            <div className="ko-empty">
+              <Loader2 size={18} className="ko-spin" /> Membuka rak buat
+              diedit...
+            </div>
+          )}
+
+          {!currentRak && !loadingEditRak && (
             <div className="ko-card">
-              <div className="ko-batch-badge" style={{ marginBottom: 12 }}>
-                <User size={13} /> {karyawan.name} ({karyawan.employee_id})
-                <button
-                  className="ko-btn-ganti"
-                  style={{ marginLeft: 8 }}
-                  onClick={handleGantiKaryawan}
-                >
-                  Ganti
-                </button>
-              </div>
-              <div className="ko-scan-label">
-                <MapPin size={12} style={{ verticalAlign: -2 }} /> Scan / Input
-                Lokasi
-              </div>
+              <div className="ko-scan-label">Scan Kode Rak</div>
               <input
-                ref={loccolInputRef}
+                ref={rakInputRef}
                 type="text"
                 className="ko-scan-input"
-                placeholder={
-                  validatingLokasi
-                    ? "Memvalidasi ke Cross Docking..."
-                    : "Scan / ketik kode lokasi lalu Enter..."
-                }
-                value={loccolInput}
-                onChange={(e) => setLoccolInput(e.target.value)}
-                onKeyDown={handleValidasiLokasi}
-                disabled={validatingLokasi}
+                placeholder="Scan / ketik kode rak lalu Enter..."
+                value={rakValue}
+                onChange={(e) => setRakValue(e.target.value)}
+                onKeyDown={handleScanRak}
                 autoFocus
               />
             </div>
           )}
 
-          {/* Step 3: Rak & Collie */}
-          {karyawan && loccol && (
-            <>
-              <div className="ko-batch-badge" style={{ marginRight: 8 }}>
-                <User size={13} /> {karyawan.name}
-              </div>
-              <div className="ko-batch-badge">
-                <MapPin size={13} /> {loccol}
-                <button
-                  className="ko-btn-ganti"
-                  style={{ marginLeft: 8 }}
-                  onClick={handleGantiLokasi}
-                >
-                  Ganti Lokasi
+          {currentRak && (
+            <div className="ko-card">
+              <div className="ko-rak-info">
+                <div>
+                  <div className="ko-rak-code">{currentRak.rackcode}</div>
+                  <div
+                    style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}
+                  >
+                    Item: {currentRak.item_di_rak.join(", ")}
+                  </div>
+                </div>
+                <div className="ko-rak-progress">
+                  {currentRak.total_qty_scanned} /{" "}
+                  {currentRak.total_qty_target} pcs
+                  <div
+                    style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}
+                  >
+                    {currentRak.total_collie_scanned} collie discan
+                  </div>
+                </div>
+                <button className="ko-btn-ganti" onClick={handleGantiRak}>
+                  Ganti Rak
                 </button>
               </div>
 
-              {!currentRak && loadingEditRak && (
-                <div className="ko-empty">
-                  <Loader2 size={18} className="ko-spin" /> Membuka rak buat
-                  diedit...
-                </div>
-              )}
+              <div className="ko-scan-label">Scan Kode Collie</div>
+              <input
+                ref={collieInputRef}
+                type="text"
+                className="ko-scan-input ko-scan-input-collie"
+                placeholder="Scan / ketik kode collie lalu Enter..."
+                value={collieValue}
+                onChange={(e) => setCollieValue(e.target.value)}
+                onKeyDown={handleScanCollie}
+              />
 
-              {!currentRak && !loadingEditRak && (
-                <div className="ko-card">
-                  <div className="ko-scan-label">Scan Kode Rak</div>
-                  <input
-                    ref={rakInputRef}
-                    type="text"
-                    className="ko-scan-input"
-                    placeholder="Scan / ketik kode rak lalu Enter..."
-                    value={rakValue}
-                    onChange={(e) => setRakValue(e.target.value)}
-                    onKeyDown={handleScanRak}
-                    autoFocus
-                  />
-                </div>
-              )}
-
-              {currentRak && (
-                <div className="ko-card">
-                  <div className="ko-rak-info">
+              <div className="ko-scan-list">
+                {currentRak.scan_list.length === 0 && (
+                  <div className="ko-empty" style={{ padding: "1.2rem" }}>
+                    Belum ada collie yang discan di rak ini.
+                  </div>
+                )}
+                {currentRak.scan_list.map((s) => (
+                  <div key={s.collie} className="ko-scan-item">
                     <div>
-                      <div className="ko-rak-code">{currentRak.rackcode}</div>
-                      <div
-                        style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}
-                      >
-                        Item: {currentRak.item_di_rak.join(", ")}
+                      <div className="ko-scan-item-code">{s.collie}</div>
+                      <div className="ko-scan-item-meta">
+                        <Package size={11} style={{ verticalAlign: -1 }} />{" "}
+                        {s.item} · qty {s.qty} · {s.kategori}
                       </div>
-                    </div>
-                    <div className="ko-rak-progress">
-                      {currentRak.total_qty_scanned} /{" "}
-                      {currentRak.total_qty_target} pcs
-                      <div
-                        style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}
-                      >
-                        {currentRak.total_collie_scanned} collie discan
-                      </div>
-                    </div>
-                    <button className="ko-btn-ganti" onClick={handleGantiRak}>
-                      Ganti Rak
-                    </button>
-                  </div>
-
-                  <div className="ko-scan-label">Scan Kode Collie</div>
-                  <input
-                    ref={collieInputRef}
-                    type="text"
-                    className="ko-scan-input ko-scan-input-collie"
-                    placeholder="Scan / ketik kode collie lalu Enter..."
-                    value={collieValue}
-                    onChange={(e) => setCollieValue(e.target.value)}
-                    onKeyDown={handleScanCollie}
-                  />
-
-                  <div className="ko-scan-list">
-                    {currentRak.scan_list.length === 0 && (
-                      <div className="ko-empty" style={{ padding: "1.2rem" }}>
-                        Belum ada collie yang discan di rak ini.
-                      </div>
-                    )}
-                    {currentRak.scan_list.map((s) => (
-                      <div key={s.collie} className="ko-scan-item">
-                        <div>
-                          <div className="ko-scan-item-code">{s.collie}</div>
-                          <div className="ko-scan-item-meta">
-                            <Package size={11} style={{ verticalAlign: -1 }} />{" "}
-                            {s.item} · qty {s.qty} · {s.kategori}
-                          </div>
-                          {s.deskripsi && s.deskripsi !== "-" && (
-                            <div
-                              style={{
-                                fontSize: 11,
-                                color: "#94a3b8",
-                                marginTop: 1,
-                              }}
-                            >
-                              {s.deskripsi}
-                            </div>
-                          )}
-                        </div>
-                        <button
-                          className="ko-scan-batal"
-                          onClick={() => handleBatal(s.collie)}
+                      {s.deskripsi && s.deskripsi !== "-" && (
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: "#94a3b8",
+                            marginTop: 1,
+                          }}
                         >
-                          Batal
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-
-                  {currentRak.scan_list.length > 0 && (
+                          {s.deskripsi}
+                        </div>
+                      )}
+                    </div>
                     <button
-                      className="ko-btn-primary"
-                      style={{ marginTop: 14 }}
-                      onClick={handleSelesai}
+                      className="ko-scan-batal"
+                      onClick={() => handleBatal(s.collie)}
                     >
-                      <CheckCircle2 size={16} /> Selesai
+                      Batal
                     </button>
-                  )}
-                </div>
+                  </div>
+                ))}
+              </div>
+
+              {currentRak.scan_list.length > 0 && (
+                <button
+                  className="ko-btn-primary"
+                  style={{ marginTop: 14 }}
+                  onClick={handleSelesai}
+                >
+                  <CheckCircle2 size={16} /> Selesai
+                </button>
               )}
-            </>
+            </div>
           )}
         </>
       )}

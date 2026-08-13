@@ -4,9 +4,8 @@ const router = express.Router();
 const KarawangController = require("../../controllers/stok-opname-karawang/KarawangController");
 const CrossDockingController = require("../../controllers/stok-opname-karawang/CrossDockingController");
 const FifoController = require("../../controllers/stok-opname-karawang/FifoController");
+const TransferPlanController = require("../../controllers/stok-opname-karawang/TransferPlanController");
 
-router.get("/batches", KarawangController.listBatches);
-router.get("/batches/active", KarawangController.getActiveBatch);
 router.post("/validasi-lokasi", KarawangController.validasiLokasi);
 router.post("/scan-rak", KarawangController.scanRak);
 router.post("/scan-collie", KarawangController.scanCollie);
@@ -53,5 +52,15 @@ router.get(
 router.get("/fifo/search-item", FifoController.searchItem);
 router.get("/fifo/search-barcode", FifoController.searchBarcode);
 router.get("/fifo/locations", FifoController.locations);
+
+// ── Transfer Plan (Tangerang -> Karawang) & Retur (Karawang ->
+// Tangerang): form input, langsung tercatat (TANPA approval). Cross
+// Docking di sini cuma dipakai read-only lewat /stock-info, buat referensi
+// stok Karawang saat ini pas isi form ──
+router.get("/transfer-plan/search-item", TransferPlanController.searchItem);
+router.get("/transfer-plan/stock-info", TransferPlanController.stockInfo);
+router.get("/transfer-plan", TransferPlanController.list);
+router.post("/transfer-plan", TransferPlanController.create);
+router.delete("/transfer-plan/:id", TransferPlanController.remove);
 
 module.exports = router;
