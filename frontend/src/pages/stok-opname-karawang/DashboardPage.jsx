@@ -13,6 +13,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import Swal from "sweetalert2";
+import XLSX from "xlsx-js-style";
 import {
   Loader2,
   RefreshCw,
@@ -21,6 +22,7 @@ import {
   Trash2,
   Pencil,
   Settings,
+  FileSpreadsheet,
 } from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
@@ -603,6 +605,129 @@ function getItemStatus(it) {
   return "progress";
 }
 
+function formatWaktuScan(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const time = d.toLocaleTimeString("id-ID", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `${dd}/${mm}/${yyyy} ${time}`;
+}
+
+// Bikin & langsung download file Excel per card item — kolom Collie
+// (kode yang discan operator) + Barcode (level pcs dari Cross Docking,
+// bisa lebih dari 1 per collie, dipisah koma), lihat
+// KarawangController.exportItemDetail buat sumber datanya.
+function exportItemDetailToExcel(itemCode, deskripsi, rows) {
+  const headers = [
+    "No",
+    "Rackcode",
+    "Lokasi",
+    "Collie",
+    "Barcode",
+    "Qty",
+    "Operator",
+    "Waktu Scan",
+  ];
+
+  const dataRows = rows.map((r, idx) => [
+    idx + 1,
+    r.rackcode || "-",
+    r.loccol || "-",
+    r.collie || "-",
+    r.barcode || "-",
+    r.qty ?? 0,
+    r.nama || "-",
+    formatWaktuScan(r.waktu_scan),
+  ]);
+
+  const titleRow = [`STOK OPNAME DC KARAWANG — ${itemCode}`];
+  const descRow = [deskripsi || "-"];
+
+  const ws = XLSX.utils.aoa_to_sheet([
+    titleRow,
+    descRow,
+    [],
+    headers,
+    ...dataRows,
+  ]);
+
+  ws["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: headers.length - 1 } },
+  ];
+
+  ws["!cols"] = [
+    { wch: 5 },
+    { wch: 16 },
+    { wch: 12 },
+    { wch: 20 },
+    { wch: 20 },
+    { wch: 8 },
+    { wch: 22 },
+    { wch: 18 },
+  ];
+
+  const titleStyle = {
+    font: { bold: true, sz: 13, color: { rgb: "0F172A" } },
+    alignment: { horizontal: "center" },
+  };
+  const descStyle = {
+    font: { sz: 10, color: { rgb: "475569" } },
+    alignment: { horizontal: "center" },
+  };
+  const headerStyle = {
+    font: { bold: true, color: { rgb: "FFFFFF" }, sz: 11 },
+    fill: { fgColor: { rgb: "7C3AED" } },
+    alignment: { horizontal: "center", vertical: "center" },
+    border: {
+      top: { style: "thin", color: { rgb: "5B21B6" } },
+      bottom: { style: "thin", color: { rgb: "5B21B6" } },
+      left: { style: "thin", color: { rgb: "5B21B6" } },
+      right: { style: "thin", color: { rgb: "5B21B6" } },
+    },
+  };
+  const cellStyle = {
+    font: { sz: 10, color: { rgb: "1E293B" } },
+    alignment: { vertical: "center", wrapText: true },
+    border: {
+      top: { style: "thin", color: { rgb: "94A3B8" } },
+      bottom: { style: "thin", color: { rgb: "94A3B8" } },
+      left: { style: "thin", color: { rgb: "94A3B8" } },
+      right: { style: "thin", color: { rgb: "94A3B8" } },
+    },
+  };
+
+  if (ws["A1"]) ws["A1"].s = titleStyle;
+  if (ws["A2"]) ws["A2"].s = descStyle;
+
+  const headerRowIdx = 3;
+  headers.forEach((_, c) => {
+    const cellRef = XLSX.utils.encode_cell({ r: headerRowIdx, c });
+    if (ws[cellRef]) ws[cellRef].s = headerStyle;
+  });
+
+  dataRows.forEach((row, rIdx) => {
+    row.forEach((_, c) => {
+      const cellRef = XLSX.utils.encode_cell({
+        r: headerRowIdx + 1 + rIdx,
+        c,
+      });
+      if (ws[cellRef]) ws[cellRef].s = cellStyle;
+    });
+  });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, itemCode.slice(0, 31) || "Item");
+  const today = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `StokOpnameKarawang_${itemCode}_${today}.xlsx`);
+}
+
 export default function KarawangDashboardPage() {
   const navigate = useNavigate();
   const [initLoading, setInitLoading] = useState(true);
@@ -616,6 +741,39 @@ export default function KarawangDashboardPage() {
   const [showVarianceModal, setShowVarianceModal] = useState(false);
   const [showKarantinaModal, setShowKarantinaModal] = useState(false);
   const [showCutoffSettingModal, setShowCutoffSettingModal] = useState(false);
+  const [exportingItem, setExportingItem] = useState(null); // kode item yang lagi diexport
+
+  // Export Excel per card: ambil daftar collie + barcode item ini dari
+  // backend (KarawangController.exportItemDetail), lalu langsung download.
+  const handleExportItem = async (it) => {
+    if (exportingItem) return;
+    setExportingItem(it.item);
+    try {
+      const res = await api.get(
+        `/stok-opname-karawang/dashboard/item-export/${encodeURIComponent(it.item)}`,
+      );
+      const rows = res.data?.data?.rows || [];
+      if (!rows.length) {
+        Swal.fire({
+          icon: "info",
+          title: "Belum ada data",
+          text: `Belum ada collie yang discan untuk item ${it.item}.`,
+        });
+        return;
+      }
+      exportItemDetailToExcel(it.item, it.deskripsi, rows);
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Gagal export",
+        text:
+          err.response?.data?.message ||
+          "Gagal mengambil data buat export Excel. Coba lagi.",
+      });
+    } finally {
+      setExportingItem(null);
+    }
+  };
 
   const loadFull = useCallback((refresh) => {
     if (refresh) setRefreshing(true);
@@ -908,39 +1066,86 @@ export default function KarawangDashboardPage() {
               {full.items.map((it) => {
                 const status = getItemStatus(it);
                 return (
-                  <button
+                  <div
                     key={it.item}
-                    type="button"
                     className={`ko-item-card ko-item-card-${status}`}
-                    onClick={() => setSelectedItem(it)}
+                    style={{ position: "relative" }}
                   >
-                    <div
-                      className="ko-radial"
+                    <button
+                      type="button"
+                      className="ko-item-card-export-btn"
+                      title="Export Excel (collie & barcode)"
+                      disabled={exportingItem === it.item}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleExportItem(it);
+                      }}
                       style={{
-                        "--pct": it.persen,
-                        "--ring-color":
-                          status === "over" ? "#dc2626" : "#7c3aed",
+                        position: "absolute",
+                        top: 6,
+                        right: 6,
+                        zIndex: 1,
+                        background: "rgba(255,255,255,0.9)",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: 6,
+                        width: 24,
+                        height: 24,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        cursor: exportingItem === it.item ? "wait" : "pointer",
+                        color: "#16a34a",
                       }}
                     >
-                      <span className="ko-radial-label">{it.persen}%</span>
-                    </div>
-                    <div className="ko-item-info">
-                      <div className="ko-item-code">{it.item}</div>
-                      <div className="ko-item-descr">{it.deskripsi}</div>
-                    </div>
-                    <div className="ko-item-qty" style={{ textAlign: "right" }}>
-                      {it.qty_scanned} / {it.qty_target}
-                      <div className="ko-muted" style={{ fontSize: 9 }}>
-                        {it.collie_scanned} collie
-                        {it.outbound && it.outbound.confirmed_qty > 0 && (
-                          <span style={{ color: "#2563eb" }}>
-                            {" "}
-                            · ada outbound
-                          </span>
-                        )}
+                      {exportingItem === it.item ? (
+                        <Loader2 size={13} className="ko-spin" />
+                      ) : (
+                        <FileSpreadsheet size={13} />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="ko-item-card-body"
+                      onClick={() => setSelectedItem(it)}
+                      style={{
+                        width: "100%",
+                        background: "transparent",
+                        border: "none",
+                        padding: 0,
+                        display: "contents",
+                      }}
+                    >
+                      <div
+                        className="ko-radial"
+                        style={{
+                          "--pct": it.persen,
+                          "--ring-color":
+                            status === "over" ? "#dc2626" : "#7c3aed",
+                        }}
+                      >
+                        <span className="ko-radial-label">{it.persen}%</span>
                       </div>
-                    </div>
-                  </button>
+                      <div className="ko-item-info">
+                        <div className="ko-item-code">{it.item}</div>
+                        <div className="ko-item-descr">{it.deskripsi}</div>
+                      </div>
+                      <div
+                        className="ko-item-qty"
+                        style={{ textAlign: "right" }}
+                      >
+                        {it.qty_scanned} / {it.qty_target}
+                        <div className="ko-muted" style={{ fontSize: 9 }}>
+                          {it.collie_scanned} collie
+                          {it.outbound && it.outbound.confirmed_qty > 0 && (
+                            <span style={{ color: "#2563eb" }}>
+                              {" "}
+                              · ada outbound
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  </div>
                 );
               })}
             </div>

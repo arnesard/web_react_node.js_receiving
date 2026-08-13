@@ -126,6 +126,74 @@ class KarawangCrossDockingModel {
   // outbound dari gudang). Kalau tiap rak di-floor sendiri2 duluan, kasus
   // pindah-rak keitung dobel jadi "outbound" padahal barangnya masih ada,
   // cuma beda rak.
+  // Peta bc_collie -> barcode buat 1 rackcode+item — LANGSUNG dari
+  // /stock-cd/detail (endpoint yang sama dipakai popup "Detail:
+  // RACKCODE/ITEM" di web Cross Docking asli, dan yang sama dipakai
+  // verifyCollie pas validasi scan). Endpoint ini udah ngebalikin barcode
+  // per baris (level pcs) SEKALIGUS bc_collie-nya — gak perlu nembak
+  // detail-all lagi. bc_collie di sini tinggal dicocokin ke `collie` yang
+  // udah kita simpen sendiri pas operator scan (r.collie di controller) —
+  // collie-nya udah kita tau dari data scan kita sendiri, tinggal dicari
+  // barcode-barcode yang bc_collie-nya sama.
+  // Dipakai KarawangController.exportItemDetail buat nyandingin tiap
+  // collie yang sudah discan operator dengan barcode (level pcs) yang
+  // bersangkutan pas export Excel per card di Dashboard.
+  // Balikin Map kosong (bukan error) kalau gagal nembak CD, biar export
+  // tetep jalan dengan kolom Barcode "-" buat rak itu.
+  static async barcodeMapForRakItem(rackcode, item) {
+    const kode = (rackcode || "").trim();
+    const kodeItem = (item || "").trim();
+    const map = new Map();
+    if (!kode || !kodeItem) return map;
+
+    let detailRows = [];
+    try {
+      detailRows = await CrossDockingClient.fetchDetail(kode, kodeItem);
+    } catch (err) {
+      console.error(
+        `KarawangCrossDockingModel.barcodeMapForRakItem: gagal ambil detail ${kode}/${kodeItem}:`,
+        err,
+      );
+      return map;
+    }
+
+    if (!detailRows || !detailRows.length) {
+      console.warn(
+        `[Export Karawang] /stock-cd/detail KOSONG buat ${kode}/${kodeItem}.`,
+      );
+      return map;
+    }
+
+    // Debug sekali per rak: cetak key mentah + 1 contoh baris biar
+    // kelihatan nama field bc_collie & barcode-nya beneran apa persis di
+    // endpoint ini. Kalau export masih "-" semua, cek log ini dulu.
+    console.log(
+      `[Export Karawang] Contoh key dari /stock-cd/detail (${kode}/${kodeItem}):`,
+      Object.keys(detailRows[0] || {}),
+      "| contoh baris:",
+      detailRows[0],
+    );
+
+    detailRows.forEach((row) => {
+      const bcCollie = getField(row, "bc_collie");
+      const barcodeRaw = getField(row, "barcode");
+      if (bcCollie === undefined || bcCollie === null) return;
+      const kodeCollie = String(bcCollie).trim();
+      if (!kodeCollie || barcodeRaw === undefined) return;
+      const barcode = String(barcodeRaw).trim();
+      if (!barcode) return;
+      const existing = map.get(kodeCollie) || [];
+      existing.push(barcode);
+      map.set(kodeCollie, existing);
+    });
+
+    console.log(
+      `[Export Karawang] ${kode}/${kodeItem}: ${detailRows.length} baris /stock-cd/detail, ${map.size} collie ketemu barcode-nya.`,
+    );
+
+    return map;
+  }
+
   static async checkOutbound(rackcode, item, qtyScanned) {
     const kode = (rackcode || "").trim();
     const kodeItem = (item || "").trim();

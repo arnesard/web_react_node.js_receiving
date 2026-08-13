@@ -95,6 +95,31 @@ class KarawangScanModel {
     return rows;
   }
 
+  // List MENTAH semua collie yang sudah discan untuk 1 item (join nama
+  // operator) — dasar buat export Excel per card di Dashboard (kolom
+  // Collie + Barcode, lihat KarawangController.exportItemDetail).
+  static async listByItem(item) {
+    const [rows] = await poolUtama.query(
+      `SELECT s.id, s.rackcode, s.collie, s.loccol, s.qty, s.waktu_scan,
+              s.id_karyawan, e.employee_id AS employee_id, e.name AS nama
+       FROM stok_opname_karawang_scan s
+       LEFT JOIN employees e ON e.id = s.id_karyawan
+       WHERE s.item = ?
+       ORDER BY s.rackcode ASC, s.waktu_scan ASC`,
+      [item],
+    );
+    return rows.map((r) => ({
+      rackcode: r.rackcode,
+      collie: r.collie,
+      loccol: r.loccol,
+      qty: Number(r.qty),
+      waktu_scan: r.waktu_scan,
+      id_karyawan: r.id_karyawan,
+      employee_id: r.employee_id || null,
+      nama: r.nama || (r.id_karyawan ? `#${r.id_karyawan}` : "Tanpa PIC"),
+    }));
+  }
+
   // Ringkasan realisasi per item — dasar kolom "sudah discan" di dashboard.
   static async summaryPerItem() {
     const [rows] = await poolUtama.query(

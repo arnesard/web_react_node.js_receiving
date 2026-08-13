@@ -17,6 +17,9 @@ router.get("/dashboard", KarawangController.dashboard);
 // "Refresh Data Cross Docking" di UI), lihat catatan di
 // KarawangController.dashboardFull.
 router.get("/dashboard/full", KarawangController.dashboardFull);
+// Data mentah (collie + barcode) buat tombol "Export Excel" di tiap card
+// Dashboard — lihat KarawangController.exportItemDetail.
+router.get("/dashboard/item-export/:item", KarawangController.exportItemDetail);
 // Setting cutoff "Barang Karantina" (tombol gear di Dashboard) — GET buat
 // baca nilai aktif, PUT buat set manual, DELETE buat balik ke otomatis
 // (hari ini jam 12:00 WIB, geser tiap hari).

@@ -477,8 +477,7 @@ function computeAllStockData(raw, cutoff) {
     const lastUpdate = lastUpdateRaw ? new Date(lastUpdateRaw) : null;
     const isValidDate = lastUpdate && !Number.isNaN(lastUpdate.getTime());
     if (lastUpdateRaw && !isValidDate) skippedNoLastUpdate += 1;
-    const isKarantina =
-      isValidDate && lastUpdate.getTime() >= cutoff.getTime();
+    const isKarantina = isValidDate && lastUpdate.getTime() >= cutoff.getTime();
 
     const targetMap = isKarantina ? karantinaPerItem : perItem;
     if (!targetMap.has(item)) targetMap.set(item, { qty: 0 });
@@ -899,6 +898,64 @@ class KarawangController {
     }
   }
 
+  // GET /api/stok-opname-karawang/dashboard/item-export/:item
+  // Data mentah buat tombol "Export Excel" di tiap card Dashboard: semua
+  // collie yang sudah discan operator buat item ini, disandingin sama
+  // barcode (level pcs, dari Cross Docking) yang bersangkutan. Query CD
+  // di-scope cuma ke rackcode-rackcode yang emang udah discan buat item
+  // ini (bukan detail-all), jadi ringan.
+  async exportItemDetail(req, res) {
+    try {
+      const item = String(req.params.item || "").trim();
+      if (!item) {
+        return response.error(res, "item wajib diisi", 422);
+      }
+
+      const scanRows = await KarawangScanModel.listByItem(item);
+      if (!scanRows.length) {
+        return response.success(res, { item, rows: [] });
+      }
+
+      const distinctRackcodes = [
+        ...new Set(scanRows.map((r) => r.rackcode).filter(Boolean)),
+      ];
+      const barcodeMaps = await mapWithConcurrency(
+        distinctRackcodes,
+        5,
+        async (rackcode) => ({
+          rackcode,
+          map: await KarawangCrossDockingModel.barcodeMapForRakItem(
+            rackcode,
+            item,
+          ),
+        }),
+      );
+      const barcodeMapByRak = new Map(
+        barcodeMaps.map((r) => [r.rackcode, r.map]),
+      );
+
+      const rows = scanRows.map((r) => {
+        const map = barcodeMapByRak.get(r.rackcode);
+        const barcodes = map ? map.get(r.collie) : undefined;
+        return {
+          rackcode: r.rackcode,
+          collie: r.collie,
+          barcode: barcodes && barcodes.length ? barcodes.join(", ") : "-",
+          loccol: r.loccol,
+          qty: r.qty,
+          nama: r.nama,
+          employee_id: r.employee_id,
+          waktu_scan: r.waktu_scan,
+        };
+      });
+
+      return response.success(res, { item, rows });
+    } catch (err) {
+      console.error("KarawangController.exportItemDetail gagal:", err);
+      return response.error(res, err.message);
+    }
+  }
+
   // GET /api/stok-opname-karawang/dashboard/full?refresh=true
   // Dashboard versi "compare ke SEMUA stok Cross Docking" (bukan cuma rak
   // yang udah discan). Query berat (`detail-all` tanpa filter) CUMA
@@ -1061,7 +1118,10 @@ class KarawangController {
             qty_scanned: effectiveScanned,
             sisa_qty: it.qty_target - effectiveScanned,
             persen: it.qty_target
-              ? Math.min(100, Math.floor((effectiveScanned / it.qty_target) * 100))
+              ? Math.min(
+                  100,
+                  Math.floor((effectiveScanned / it.qty_target) * 100),
+                )
               : 0,
             overscan: it.qty_target
               ? effectiveScanned > it.qty_target
@@ -1212,10 +1272,7 @@ class KarawangController {
         is_manual: isKarantinaCutoffManual(),
       });
     } catch (err) {
-      console.error(
-        "KarawangController.getKarantinaCutoffSetting gagal:",
-        err,
-      );
+      console.error("KarawangController.getKarantinaCutoffSetting gagal:", err);
       return response.error(res, err.message);
     }
   }
@@ -1244,10 +1301,7 @@ class KarawangController {
         dashboard: data,
       });
     } catch (err) {
-      console.error(
-        "KarawangController.setKarantinaCutoffSetting gagal:",
-        err,
-      );
+      console.error("KarawangController.setKarantinaCutoffSetting gagal:", err);
       return response.error(res, err.message || "Gagal simpan cutoff", 400);
     }
   }
