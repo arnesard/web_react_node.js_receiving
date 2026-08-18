@@ -1,4 +1,4 @@
-const { poolUtama } = require("../../config/database");
+const { poolUtama, poolCrossDocking } = require("../../config/database");
 
 class KarawangItemReqModel {
   static async bulkCreate(rows) {
@@ -28,7 +28,73 @@ class KarawangItemReqModel {
     };
   }
 
+  // Qty TIRE gabungan dari 3 sumber, per kode item (TRIM+UPPER) — dipakai
+  // bareng oleh getSummary() (card ringkasan) dan getTireTripItems() (trip
+  // planner) biar dua-duanya selalu sinkron:
+  // 1. Upload Item Request manual (stok_opname_karawang_item_req, jenis
+  //    TIRE, hari ini)
+  // 2. Schedule OEM dari database EDP dept BPW (bpw_dept_db.sch_oem),
+  //    difilter DATE(updated_at) = hari ini
+  // 3. Cross Docking DO (fginvc_cd.do_cd, server terpisah) — outstanding
+  //    (requested - shipped) buat DO dengan ydo_date hari ini. Item yang
+  //    udah full shipped (outstanding <= 0) dibuang.
+  // Digabung di JS (bukan SQL UNION) karena do_cd ada di server database
+  // yang beda (poolCrossDocking, host DB_CD_HOST) — gak bisa di-JOIN/UNION
+  // langsung sama tabel di poolUtama.
+  static async _getCombinedTireQtyMap() {
+    const [reqRows] = await poolUtama.query(`
+      SELECT TRIM(UPPER(item)) AS item, SUM(CAST(qty AS DECIMAL(15,3))) AS qty
+      FROM stok_opname_karawang_item_req
+      WHERE date = CURDATE() AND UPPER(jenis) = 'TIRE'
+      GROUP BY TRIM(UPPER(item))
+    `);
+
+    const [schRows] = await poolUtama.query(`
+      SELECT TRIM(UPPER(item)) AS item, SUM(CAST(qty AS DECIMAL(15,3))) AS qty
+      FROM bpw_dept_db.sch_oem
+      WHERE DATE(updated_at) = CURDATE()
+      GROUP BY TRIM(UPPER(item))
+    `);
+
+    const [doCdRows] = await poolCrossDocking.query(`
+      SELECT
+        TRIM(UPPER(item)) AS item,
+        descr AS deskripsi,
+        SUM(CAST(requested AS SIGNED) - CAST(shipped AS SIGNED)) AS qty
+      FROM do_cd
+      WHERE ydo_date = DATE_FORMAT(CURDATE(), '%Y%m%d')
+      GROUP BY TRIM(UPPER(item)), descr
+      HAVING qty > 0
+    `);
+
+    const map = new Map();
+    const addQty = (item, qty, deskripsi) => {
+      if (!item || !qty) return;
+      const existing = map.get(item);
+      if (existing) {
+        existing.qty += qty;
+        if (!existing.deskripsi && deskripsi) existing.deskripsi = deskripsi;
+      } else {
+        map.set(item, { item, qty, deskripsi: deskripsi || null });
+      }
+    };
+
+    reqRows.forEach((r) => addQty(r.item, Number(r.qty || 0)));
+    schRows.forEach((r) => addQty(r.item, Number(r.qty || 0)));
+    doCdRows.forEach((r) => addQty(r.item, Number(r.qty || 0), r.deskripsi));
+
+    // Buang item yang qty akhirnya <= 0 (mis. do_cd yang udah full shipped
+    // tapi ada koreksi minus dari sumber lain)
+    for (const [key, val] of map.entries()) {
+      if (val.qty <= 0) map.delete(key);
+    }
+
+    return map;
+  }
+
   static async getSummary() {
+    // Kategori selain TIRE (RIMBAND/TUBE/VALVE/dst) — murni dari upload
+    // Excel manual, sama seperti sebelumnya.
     const [rows] = await poolUtama.query(`
     SELECT
       r.jenis,
@@ -45,34 +111,79 @@ class KarawangItemReqModel {
     LEFT JOIN stok_opname_karawang_master_item m
       ON r.item = m.code_no
     WHERE r.date = CURDATE()
+      AND UPPER(r.jenis) <> 'TIRE'
     GROUP BY r.jenis
-    ORDER BY r.jenis
   `);
+
+    // Kategori TIRE dihitung terpisah, gabungan item_req + sch_oem + do_cd
+    // biar sinkron sama Trip Planner.
+    const tireMap = await this._getCombinedTireQtyMap();
+    if (tireMap.size > 0) {
+      const itemCodes = Array.from(tireMap.keys());
+      const [masterRows] = await poolUtama.query(
+        `SELECT TRIM(UPPER(code_no)) AS code_no, COALESCE(volume, 0) AS volume
+         FROM stok_opname_karawang_master_item
+         WHERE TRIM(UPPER(code_no)) IN (?)`,
+        [itemCodes],
+      );
+      const volumeMap = new Map(
+        masterRows.map((m) => [m.code_no, Number(m.volume || 0)]),
+      );
+
+      let totalQty = 0;
+      let totalVolume = 0;
+      for (const [item, { qty }] of tireMap.entries()) {
+        totalQty += qty;
+        totalVolume += qty * (volumeMap.get(item) || 0);
+      }
+
+      rows.push({
+        jenis: "TIRE",
+        jumlah_item: itemCodes.length,
+        total_qty: totalQty,
+        total_volume: totalVolume,
+      });
+    }
+
+    rows.sort((a, b) => String(a.jenis).localeCompare(String(b.jenis)));
 
     return rows;
   }
 
+  // Item TIRE (qty + deskripsi + volume) buat Tire Trip Plan — gabungan 3
+  // sumber lewat _getCombinedTireQtyMap(), lalu di-enrich volume/deskripsi
+  // dari master_item (fallback ke deskripsi bawaan do_cd kalau item gak
+  // ketemu di master_item).
   static async getTireTripItems() {
-    const [rows] = await poolUtama.query(`
-    SELECT
-      r.id,
-      r.item,
-      r.qty,
-      r.jenis,
-      r.date,
-      m.description AS deskripsi,
-      COALESCE(m.volume, 0) AS volume,
-      (
-        CAST(r.qty AS DECIMAL(15,3)) *
-        COALESCE(m.volume, 0)
-      ) AS total_volume
-    FROM stok_opname_karawang_item_req r
-    LEFT JOIN stok_opname_karawang_master_item m
-      ON r.item = m.code_no
-    WHERE r.date = CURDATE()
-      AND UPPER(r.jenis) = 'TIRE'
-    ORDER BY total_volume DESC, r.item ASC
-  `);
+    const tireMap = await this._getCombinedTireQtyMap();
+    if (tireMap.size === 0) return [];
+
+    const itemCodes = Array.from(tireMap.keys());
+    const [masterRows] = await poolUtama.query(
+      `SELECT TRIM(UPPER(code_no)) AS code_no, description, volume
+       FROM stok_opname_karawang_master_item
+       WHERE TRIM(UPPER(code_no)) IN (?)`,
+      [itemCodes],
+    );
+    const masterMap = new Map(masterRows.map((m) => [m.code_no, m]));
+
+    const rows = itemCodes.map((item) => {
+      const { qty, deskripsi: fallbackDeskripsi } = tireMap.get(item);
+      const master = masterMap.get(item);
+      const volume = Number(master?.volume || 0);
+      const deskripsi = master?.description || fallbackDeskripsi || "-";
+      return {
+        item,
+        qty,
+        deskripsi,
+        volume,
+        total_volume: Number((qty * volume).toFixed(3)),
+      };
+    });
+
+    rows.sort(
+      (a, b) => b.total_volume - a.total_volume || a.item.localeCompare(b.item),
+    );
 
     console.log("TIRE TRIP ITEMS:", rows);
 

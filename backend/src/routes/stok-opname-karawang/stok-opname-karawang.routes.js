@@ -62,15 +62,6 @@ router.get("/fifo/search-item", FifoController.searchItem);
 router.get("/fifo/search-barcode", FifoController.searchBarcode);
 router.get("/fifo/locations", FifoController.locations);
 
-// ── Transfer Plan (Tangerang -> Karawang) & Retur (Karawang ->
-// Tangerang): form input, langsung tercatat (TANPA approval). Cross
-// Docking di sini cuma dipakai read-only lewat /stock-info, buat referensi
-// stok Karawang saat ini pas isi form ──
-router.get("/transfer-plan/search-item", TransferPlanController.searchItem);
-router.get("/transfer-plan/stock-info", TransferPlanController.stockInfo);
-router.get("/transfer-plan", TransferPlanController.list);
-router.post("/transfer-plan", TransferPlanController.create);
-router.delete("/transfer-plan/:id", TransferPlanController.remove);
 // Upload Item Request
 router.post(
   "/item-req/upload",
