@@ -18,17 +18,9 @@ const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } }); // ma
 
 // Routes — equivalen Route:: di Laravel
 router.get("/input", InputController.getInputData); // GET data form
-router.post(
-  "/input/:plant",
-  upload.single("photo"),
-  InputController.store,
-);
+router.post("/input/:plant", upload.single("photo"), InputController.store);
 router.get("/input/:plant/:id", InputController.getEditData);
-router.put(
-  "/input/:plant/:id",
-  upload.single("photo"),
-  InputController.update,
-);
+router.put("/input/:plant/:id", upload.single("photo"), InputController.update);
 router.delete("/:plant/:id", InputController.destroy);
 
 module.exports = router;

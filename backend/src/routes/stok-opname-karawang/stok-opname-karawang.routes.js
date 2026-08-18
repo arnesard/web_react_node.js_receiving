@@ -1,11 +1,17 @@
 // src/routes/stok-opname-karawang/stok-opname-karawang.routes.js
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
 const KarawangController = require("../../controllers/stok-opname-karawang/KarawangController");
 const CrossDockingController = require("../../controllers/stok-opname-karawang/CrossDockingController");
 const FifoController = require("../../controllers/stok-opname-karawang/FifoController");
 const TransferPlanController = require("../../controllers/stok-opname-karawang/TransferPlanController");
-
+const uploadItemReq = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+  },
+});
 router.post("/validasi-lokasi", KarawangController.validasiLokasi);
 router.post("/scan-rak", KarawangController.scanRak);
 router.post("/scan-collie", KarawangController.scanCollie);
@@ -65,5 +71,13 @@ router.get("/transfer-plan/stock-info", TransferPlanController.stockInfo);
 router.get("/transfer-plan", TransferPlanController.list);
 router.post("/transfer-plan", TransferPlanController.create);
 router.delete("/transfer-plan/:id", TransferPlanController.remove);
+// Upload Item Request
+router.post(
+  "/item-req/upload",
+  uploadItemReq.single("file"),
+  TransferPlanController.uploadItemRequest,
+);
+router.get("/item-req/tire-trip-plan", TransferPlanController.tireTripPlan);
 
+router.get("/item-req/summary", TransferPlanController.itemRequestSummary);
 module.exports = router;

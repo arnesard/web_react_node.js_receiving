@@ -73,6 +73,26 @@ class KarawangTransferPlanModel {
     return rows;
   }
 
+  static async insertItemRequest(rows) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return 0;
+    }
+
+    const values = rows.map((row) => [
+      row.item,
+      String(row.qty),
+      row.ket || "",
+    ]);
+
+    const [result] = await poolUtama.query(
+      `INSERT INTO stok_opname_karawang_item_req
+      (item, qty, ket)
+     VALUES ?`,
+      [values],
+    );
+
+    return result.affectedRows;
+  }
   static async remove(id) {
     const [result] = await poolUtama.query(
       `DELETE FROM stok_opname_karawang_transfer_plan WHERE id = ?`,

@@ -901,9 +901,17 @@ class KarawangController {
   // GET /api/stok-opname-karawang/dashboard/item-export/:item
   // Data mentah buat tombol "Export Excel" di tiap card Dashboard: semua
   // collie yang sudah discan operator buat item ini, disandingin sama
-  // barcode (level pcs, dari Cross Docking) yang bersangkutan. Query CD
-  // di-scope cuma ke rackcode-rackcode yang emang udah discan buat item
-  // ini (bukan detail-all), jadi ringan.
+  // barcode (level pcs) yang bersangkutan.
+  //
+  // CATATAN PENTING (fix Agustus 2026): sebelumnya barcode ditarik lewat
+  // barcodeMapForRakItem() yang nembak /stock-cd/detail PER rackcode+item
+  // — ternyata sering balik KOSONG (rak yang udah discan operator belum
+  // tentu masih match posisinya sekarang, karena stok terus bergerak).
+  // Diganti pakai SUMBER DATA YANG SAMA dengan Halaman Barcode
+  // (getBarcodeLiveData, dari /stock-cd/detail-all + enrichWithBcCollie)
+  // yang sudah kebukti jalan pas dites manual (search rak nampilin collie
+  // & barcode dengan benar). Cara cocokinnya: group data live itu per
+  // rackcode+collie, terus tinggal di-lookup buat tiap baris hasil scan.
   async exportItemDetail(req, res) {
     try {
       const item = String(req.params.item || "").trim();
@@ -916,31 +924,37 @@ class KarawangController {
         return response.success(res, { item, rows: [] });
       }
 
-      const distinctRackcodes = [
-        ...new Set(scanRows.map((r) => r.rackcode).filter(Boolean)),
-      ];
-      const barcodeMaps = await mapWithConcurrency(
-        distinctRackcodes,
-        5,
-        async (rackcode) => ({
-          rackcode,
-          map: await KarawangCrossDockingModel.barcodeMapForRakItem(
-            rackcode,
-            item,
-          ),
-        }),
-      );
-      const barcodeMapByRak = new Map(
-        barcodeMaps.map((r) => [r.rackcode, r.map]),
-      );
+      // Pakai cache Halaman Barcode kalau udah pernah di-refresh (gak
+      // nembak Cross Docking lagi biar cepet); kalau belum ada sama
+      // sekali, baru tarik sekali di sini.
+      let liveData;
+      try {
+        liveData = await getBarcodeLiveData({ forceRefresh: false });
+      } catch (liveErr) {
+        console.error(
+          "KarawangController.exportItemDetail gagal ambil data live barcode:",
+          liveErr,
+        );
+        liveData = null;
+      }
+
+      // Map "rackcode||collie" -> array barcode, dari data live (bisa lebih
+      // dari 1 barcode per collie karena 1 collie = banyak pcs).
+      const barcodeByRakCollie = new Map();
+      (liveData?.items || []).forEach((it) => {
+        if (!it.rackcode || !it.collie || it.collie === "-") return;
+        const key = `${it.rackcode}||${it.collie}`;
+        const arr = barcodeByRakCollie.get(key) || [];
+        if (it.barcode && it.barcode !== "-") arr.push(it.barcode);
+        barcodeByRakCollie.set(key, arr);
+      });
 
       const rows = scanRows.map((r) => {
-        const map = barcodeMapByRak.get(r.rackcode);
-        const barcodes = map ? map.get(r.collie) : undefined;
+        const arr = barcodeByRakCollie.get(`${r.rackcode}||${r.collie}`);
         return {
           rackcode: r.rackcode,
           collie: r.collie,
-          barcode: barcodes && barcodes.length ? barcodes.join(", ") : "-",
+          barcode: arr && arr.length ? arr.join(", ") : "-",
           loccol: r.loccol,
           qty: r.qty,
           nama: r.nama,
