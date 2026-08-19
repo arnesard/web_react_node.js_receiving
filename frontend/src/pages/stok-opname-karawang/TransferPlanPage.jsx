@@ -7,7 +7,7 @@
 //    dari item request jenis TIRE hari ini, digabung juga dengan data
 //    Schedule OEM dari bpw_dept_db.sch_oem (lihat KarawangItemRequestModel
 //    getTireTripItems di backend).
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Swal from "sweetalert2";
 import {
   Loader2,
@@ -19,6 +19,10 @@ import {
   Filter,
   X,
   History,
+  Plus,
+  Trash2,
+  RefreshCw,
+  ArrowRight,
 } from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
@@ -30,12 +34,20 @@ export default function TransferPlanPage() {
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadingFile, setUploadingFile] = useState(false);
 
-  const [tripCapacity, setTripCapacity] = useState(52);
-  const [tireTripPlan, setTireTripPlan] = useState(null);
-  const [loadingTripPlan, setLoadingTripPlan] = useState(false);
   const [savingTripPlan, setSavingTripPlan] = useState(false);
 
   const [summaryItemReq, setSummaryItemReq] = useState([]);
+
+  // ============ PREVIEW ITEM REQUEST + STOK TANGERANG/KARAWANG ============
+  const [previewItems, setPreviewItems] = useState([]);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+
+  // ============ MANUAL TRIP BUILDER ============
+  // manualTrips: [{ id, no_trip, items: [{item, deskripsi, qty, volume, total_volume}] }]
+  const [manualTrips, setManualTrips] = useState([]);
+  // Input qty & pilihan trip tujuan per baris item di tabel preview.
+  const [rowQty, setRowQty] = useState({});
+  const [rowTripSelect, setRowTripSelect] = useState({});
 
   // ============ HISTORI TRIP PLAN (Filter Riwayat) ============
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -60,8 +72,29 @@ export default function TransferPlanPage() {
     }
   };
 
+  // Preview item request TIRE hari ini + stok Tangerang (Control Stock) &
+  // stok Karawang (Control FIFO), dasar buat milih manual No Trip + item.
+  const loadPreview = async () => {
+    setLoadingPreview(true);
+
+    try {
+      const res = await api.get("/stok-opname-karawang/item-req/preview");
+
+      setPreviewItems(res.data?.data || []);
+    } catch (err) {
+      Swal.fire(
+        "Gagal Memuat Preview",
+        err.response?.data?.message || err.message,
+        "error",
+      );
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+
   useEffect(() => {
     loadSummaryItemReq();
+    loadPreview();
   }, []);
 
   const handleDownloadTemplate = () => {
@@ -143,7 +176,7 @@ export default function TransferPlanPage() {
       setUploadFile(null);
       setShowUploadModal(false);
 
-      await loadSummaryItemReq();
+      await Promise.all([loadSummaryItemReq(), loadPreview()]);
     } catch (err) {
       console.error("UPLOAD ERROR:", err);
 
@@ -160,101 +193,169 @@ export default function TransferPlanPage() {
     }
   };
 
-  const loadTireTripPlan = async (kapasitas = tripCapacity) => {
-    setLoadingTripPlan(true);
+  // ===== MANUAL TRIP BUILDER =====
+  // Total qty per item yang UDAH dimasukkan ke salah satu trip manual —
+  // dipakai buat nampilin "Sisa" di tabel preview (Request - Sudah Masuk Trip).
+  const allocatedQtyMap = useMemo(() => {
+    const map = {};
+    manualTrips.forEach((trip) => {
+      trip.items.forEach((item) => {
+        map[item.item] = (map[item.item] || 0) + Number(item.qty || 0);
+      });
+    });
+    return map;
+  }, [manualTrips]);
 
-    try {
-      const res = await api.get(
-        "/stok-opname-karawang/item-req/tire-trip-plan",
-        {
-          params: {
-            kapasitas,
-          },
-        },
-      );
+  const manualTripTotals = useMemo(() => {
+    let totalQty = 0;
+    let totalVolume = 0;
+    let totalItemLines = 0;
 
-      setTireTripPlan(res.data?.data || null);
-    } catch (err) {
-      Swal.fire(
-        "Gagal membuat Trip Plan",
-        err.response?.data?.message || err.message,
-        "error",
-      );
-    } finally {
-      setLoadingTripPlan(false);
-    }
+    manualTrips.forEach((trip) => {
+      trip.items.forEach((item) => {
+        totalQty += Number(item.qty || 0);
+        totalVolume += Number(item.total_volume || 0);
+        totalItemLines += 1;
+      });
+    });
+
+    return {
+      totalQty,
+      totalVolume: Number(totalVolume.toFixed(3)),
+      totalItemLines,
+      jumlahTrip: manualTrips.filter((t) => t.items.length > 0).length,
+    };
+  }, [manualTrips]);
+
+  const generateManualDoNumber = (sequence) => {
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, "0");
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const yy = String(now.getFullYear()).slice(-2);
+    const seq = String(sequence).padStart(3, "0");
+
+    return `T-2${dd}${mm}${yy}${seq}`;
   };
 
-  const updateTripItemQty = (tripNumber, itemCode, change) => {
-    setTireTripPlan((prev) => {
-      if (!prev) return prev;
+  // Bikin trip manual baru (No Trip auto-generate, tapi bisa diedit user).
+  const addManualTrip = () => {
+    const id = `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-      const trips = prev.trips.map((trip) => {
-        if (trip.trip !== tripNumber) return trip;
+    setManualTrips((prev) => [
+      ...prev,
+      {
+        id,
+        no_trip: generateManualDoNumber(prev.length + 1),
+        items: [],
+      },
+    ]);
 
-        const items = trip.items.map((item) => {
-          if (item.item !== itemCode) return item;
+    return id;
+  };
 
-          const currentQty = Number(item.qty || 0);
+  const updateManualTripNo = (tripId, value) => {
+    setManualTrips((prev) =>
+      prev.map((t) => (t.id === tripId ? { ...t, no_trip: value } : t)),
+    );
+  };
 
-          let newQty;
+  const removeManualTrip = async (tripId) => {
+    const result = await Swal.fire({
+      title: "Hapus Trip Ini?",
+      text: "Semua item yang sudah dimasukkan ke trip ini akan dihapus.",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Ya, Hapus",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#dc2626",
+    });
 
-          if (change > 0) {
-            // +1 → naik ke kelipatan 5 berikutnya
-            newQty = Math.ceil((currentQty + 1) / 5) * 5;
-          } else {
-            // -1 → turun ke kelipatan 5 sebelumnya
-            newQty = Math.floor((currentQty - 1) / 5) * 5;
-          }
+    if (!result.isConfirmed) return;
 
-          newQty = Math.max(0, newQty);
+    setManualTrips((prev) => prev.filter((t) => t.id !== tripId));
+  };
 
-          return {
-            ...item,
-            request_qty: Number(item.request_qty || 0),
-            qty: newQty,
-            total_volume: newQty * Number(item.volume || 0),
+  const removeItemFromManualTrip = (tripId, itemCode) => {
+    setManualTrips((prev) =>
+      prev.map((t) =>
+        t.id === tripId
+          ? { ...t, items: t.items.filter((i) => i.item !== itemCode) }
+          : t,
+      ),
+    );
+  };
+
+  // Masukkan 1 baris item preview (dengan qty yang diisi user) ke trip
+  // yang dipilih di dropdown baris itu — kalau dropdown-nya "+ Trip Baru"
+  // (atau belum ada trip sama sekali), trip baru dibuat dulu on-the-fly.
+  const assignItemToTrip = (previewItem) => {
+    const qty = Number(rowQty[previewItem.item]);
+
+    if (!qty || qty <= 0) {
+      Swal.fire(
+        "Qty Belum Diisi",
+        "Isi dulu qty yang mau dimasukkan ke trip (lebih dari 0).",
+        "warning",
+      );
+      return;
+    }
+
+    const selectedTripId = rowTripSelect[previewItem.item] || "__new__";
+    const volume = Number(previewItem.volume || 0);
+
+    setManualTrips((prev) => {
+      let trips = prev;
+      let targetId = selectedTripId;
+      const tripExists = prev.some((t) => t.id === selectedTripId);
+
+      if (selectedTripId === "__new__" || !tripExists) {
+        targetId = `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        trips = [
+          ...prev,
+          {
+            id: targetId,
+            no_trip: generateManualDoNumber(prev.length + 1),
+            items: [],
+          },
+        ];
+      }
+
+      return trips.map((t) => {
+        if (t.id !== targetId) return t;
+
+        const idx = t.items.findIndex((i) => i.item === previewItem.item);
+
+        if (idx >= 0) {
+          const mergedQty = Number(t.items[idx].qty) + qty;
+          const items = [...t.items];
+
+          items[idx] = {
+            ...items[idx],
+            qty: mergedQty,
+            total_volume: Number((mergedQty * volume).toFixed(3)),
           };
-        });
 
-        const totalQty = items.reduce(
-          (total, item) => total + Number(item.qty || 0),
-          0,
-        );
-
-        const totalVolume = items.reduce(
-          (total, item) => total + Number(item.total_volume || 0),
-          0,
-        );
-
-        const utilization =
-          tripCapacity > 0
-            ? Number(((totalVolume / tripCapacity) * 100).toFixed(1))
-            : 0;
+          return { ...t, items };
+        }
 
         return {
-          ...trip,
-          items,
-          total_qty: totalQty,
-          total_volume: totalVolume,
-          utilization,
+          ...t,
+          items: [
+            ...t.items,
+            {
+              item: previewItem.item,
+              deskripsi: previewItem.deskripsi,
+              qty,
+              volume,
+              total_volume: Number((qty * volume).toFixed(3)),
+            },
+          ],
         };
       });
-
-      return {
-        ...prev,
-        trips,
-        total_request: prev.total_request,
-        total_qty: trips.reduce(
-          (total, trip) => total + Number(trip.total_qty || 0),
-          0,
-        ),
-        total_volume: trips.reduce(
-          (total, trip) => total + Number(trip.total_volume || 0),
-          0,
-        ),
-      };
     });
+
+    setRowQty((prev) => ({ ...prev, [previewItem.item]: "" }));
+    setRowTripSelect((prev) => ({ ...prev, [previewItem.item]: "__new__" }));
   };
 
   // Export ke file Excel (.xlsx) beneran — bukan CSV lagi — biar format
@@ -322,17 +423,24 @@ export default function TransferPlanPage() {
     );
   };
 
-  const handleExportTireTripPlan = () => {
-    exportTripsToExcel(tireTripPlan?.trips, "Trip_Plan");
+  const handleExportManualTripPlan = () => {
+    exportTripsToExcel(
+      manualTrips
+        .filter((t) => t.items.length > 0)
+        .map((t) => ({ do_number: t.no_trip, items: t.items })),
+      "Trip_Plan",
+    );
   };
 
-  // Simpan hasil Trip Plan yang lagi tampil ke histori (DB) — No Trip,
-  // item, qty (request), dan total volume tiap trip.
-  const handleSaveTripPlan = async () => {
-    if (!tireTripPlan?.trips?.length) {
+  // Simpan semua trip manual yang lagi dibuat ke histori (DB) — No Trip,
+  // item, qty, dan total volume tiap trip.
+  const handleSaveManualTripPlan = async () => {
+    const tripsToSave = manualTrips.filter((t) => t.items.length > 0);
+
+    if (!tripsToSave.length) {
       Swal.fire(
         "Belum Ada Data",
-        "Buat Trip Plan dulu sebelum disimpan.",
+        "Masukkan minimal 1 item ke trip dulu sebelum disimpan.",
         "warning",
       );
       return;
@@ -344,8 +452,10 @@ export default function TransferPlanPage() {
 
     try {
       const res = await api.post("/stok-opname-karawang/trip-plan/save", {
-        kapasitas: tripCapacity,
-        trips: tireTripPlan.trips,
+        trips: tripsToSave.map((t) => ({
+          do_number: t.no_trip,
+          items: t.items,
+        })),
       });
 
       await Swal.fire({
@@ -357,6 +467,12 @@ export default function TransferPlanPage() {
         timer: 2200,
         showConfirmButton: false,
       });
+
+      setManualTrips([]);
+      setRowQty({});
+      setRowTripSelect({});
+
+      await Promise.all([loadSummaryItemReq(), loadPreview()]);
     } catch (err) {
       Swal.fire(
         "Gagal Menyimpan",
@@ -392,10 +508,10 @@ export default function TransferPlanPage() {
       setLoadingHistory(false);
     }
   };
-  const resetTireTripPlan = async () => {
+  const resetManualTripPlan = async () => {
     const result = await Swal.fire({
       title: "Reset Semua Trip?",
-      text: "Semua trip yang sudah dibuat akan dihapus. Data Item Request tetap aman.",
+      text: "Semua trip manual yang sudah dibuat akan dihapus. Data Item Request tetap aman.",
       icon: "warning",
       showCancelButton: true,
       confirmButtonText: "Ya, Reset Semua",
@@ -405,8 +521,9 @@ export default function TransferPlanPage() {
 
     if (!result.isConfirmed) return;
 
-    // Hapus semua trip dari tampilan
-    setTireTripPlan(null);
+    setManualTrips([]);
+    setRowQty({});
+    setRowTripSelect({});
 
     Swal.fire({
       title: "Trip Berhasil Direset",
@@ -415,22 +532,6 @@ export default function TransferPlanPage() {
       timer: 1500,
       showConfirmButton: false,
     });
-  };
-
-  const changeTripCapacity = async (next) => {
-    const value = Math.max(1, Number(next.toFixed(2)));
-
-    setTripCapacity(value);
-
-    await loadTireTripPlan(value);
-  };
-
-  const decreaseTripCapacity = () => {
-    changeTripCapacity(tripCapacity - 0.5);
-  };
-
-  const increaseTripCapacity = () => {
-    changeTripCapacity(tripCapacity + 0.5);
   };
 
   return (
@@ -813,7 +914,7 @@ export default function TransferPlanPage() {
         </div>
       </div>
 
-      {/* ================= TIRE TRIP PLANNER ================= */}
+      {/* ================= PREVIEW ITEM REQUEST + STOK ================= */}
       <div
         className="ko-card"
         style={{
@@ -821,600 +922,620 @@ export default function TransferPlanPage() {
           padding: 20,
         }}
       >
-        {/* HEADER */}
-        {/* KAPASITAS + RESET */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
-            marginBottom: 12,
+            justifyContent: "space-between",
+            gap: 12,
+            marginBottom: 14,
           }}
         >
-          {/* KURANGI KAPASITAS */}
-          <button
-            type="button"
-            onClick={decreaseTripCapacity}
-            style={{
-              width: 34,
-              height: 34,
-              border: "1px solid #cbd5e1",
-              background: "#fff",
-              borderRadius: 8,
-              cursor: "pointer",
-              fontSize: 20,
-              fontWeight: 700,
-              color: "#475569",
-            }}
-          >
-            −
-          </button>
-
-          {/* KAPASITAS */}
-          <div
-            style={{
-              minWidth: 100,
-              textAlign: "center",
-              padding: "7px 12px",
-              background: "#f8fafc",
-              border: "1px solid #e2e8f0",
-              borderRadius: 8,
-            }}
-          >
-            <div
-              style={{
-                fontSize: 18,
-                fontWeight: 800,
-                color: "#0f172a",
-              }}
-            >
-              {tripCapacity.toFixed(1)}
-            </div>
-
-            <div
-              style={{
-                fontSize: 9,
-                color: "#94a3b8",
-                fontWeight: 600,
-              }}
-            >
-              m³ / TRIP
-            </div>
+          <div>
+            <h2 style={{ fontSize: 15, fontWeight: 800, color: "#0f172a", margin: 0 }}>
+              Preview Item Request &amp; Stok
+            </h2>
+            <p style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 4 }}>
+              Item TIRE dari Item Request hari ini, lengkap stok Tangerang (Control
+              Stock) &amp; stok Karawang (Control FIFO). Pilih No Trip &amp; qty
+              manual per item di bawah.
+            </p>
           </div>
 
-          {/* TAMBAH KAPASITAS */}
           <button
             type="button"
-            onClick={increaseTripCapacity}
-            style={{
-              width: 34,
-              height: 34,
-              border: "1px solid #cbd5e1",
-              background: "#fff",
-              borderRadius: 8,
-              cursor: "pointer",
-              fontSize: 20,
-              fontWeight: 700,
-              color: "#475569",
-            }}
-          >
-            +
-          </button>
-
-          {/* RESET TRIP */}
-          <button
-            type="button"
-            onClick={resetTireTripPlan}
-            disabled={loadingTripPlan}
-            title="Reset Trip Plan"
+            onClick={loadPreview}
+            disabled={loadingPreview}
             style={{
               height: 34,
               display: "flex",
               alignItems: "center",
               gap: 6,
-              padding: "0 12px",
-              marginLeft: 4,
-              border: "1px solid #fecaca",
+              padding: "0 14px",
+              border: "1px solid #cbd5e1",
               background: "#fff",
+              color: "#334155",
               borderRadius: 8,
-              cursor: loadingTripPlan ? "not-allowed" : "pointer",
+              cursor: loadingPreview ? "not-allowed" : "pointer",
               fontSize: 12,
               fontWeight: 700,
-              color: "#dc2626",
-              opacity: loadingTripPlan ? 0.6 : 1,
+              flexShrink: 0,
             }}
           >
-            <RotateCcw size={15} />
-            Reset
+            {loadingPreview ? (
+              <Loader2 size={14} className="ko-spin" />
+            ) : (
+              <RefreshCw size={14} />
+            )}
+            Refresh
           </button>
-          {tireTripPlan && (
+        </div>
+
+        {loadingPreview && previewItems.length === 0 && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "36px 0",
+              color: "#64748b",
+              fontSize: 13,
+              gap: 8,
+            }}
+          >
+            <Loader2 size={16} className="ko-spin" />
+            Memuat preview...
+          </div>
+        )}
+
+        {!loadingPreview && previewItems.length === 0 && (
+          <div
+            style={{
+              textAlign: "center",
+              padding: "36px 0",
+              color: "#94a3b8",
+              fontSize: 13,
+            }}
+          >
+            Belum ada Item Request TIRE hari ini. Upload Item Request dulu di
+            atas.
+          </div>
+        )}
+
+        {previewItems.length > 0 && (
+          <div style={{ overflowX: "auto" }}>
+            <table className="ko-data-table" style={{ margin: 0 }}>
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>Deskripsi</th>
+                  <th>Qty Request</th>
+                  <th>Sudah Masuk Trip</th>
+                  <th>Sisa</th>
+                  <th>Stok Tangerang</th>
+                  <th>Stok Karawang</th>
+                  <th>Qty</th>
+                  <th>Masukkan ke Trip</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {previewItems.map((item) => {
+                  const allocated = Number(allocatedQtyMap[item.item] || 0);
+                  const sisa = Number(item.qty || 0) - allocated;
+
+                  return (
+                    <tr key={item.item}>
+                      <td className="ko-mono">{item.item}</td>
+
+                      <td>{item.deskripsi || "-"}</td>
+
+                      <td
+                        className="ko-mono"
+                        style={{ textAlign: "center", fontWeight: 700 }}
+                      >
+                        {Number(item.qty || 0).toLocaleString("id-ID")}
+                      </td>
+
+                      <td
+                        className="ko-mono"
+                        style={{
+                          textAlign: "center",
+                          color: allocated > 0 ? "#2563eb" : "#94a3b8",
+                          fontWeight: 700,
+                        }}
+                      >
+                        {allocated.toLocaleString("id-ID")}
+                      </td>
+
+                      <td
+                        className="ko-mono"
+                        style={{
+                          textAlign: "center",
+                          fontWeight: 800,
+                          color:
+                            sisa < 0
+                              ? "#dc2626"
+                              : sisa === 0
+                                ? "#16a34a"
+                                : "#0f172a",
+                        }}
+                      >
+                        {sisa.toLocaleString("id-ID")}
+                      </td>
+
+                      <td
+                        className="ko-mono"
+                        style={{ textAlign: "center", color: "#475569" }}
+                      >
+                        {Number(item.stok_tangerang || 0).toLocaleString(
+                          "id-ID",
+                        )}
+                      </td>
+
+                      <td
+                        className="ko-mono"
+                        style={{ textAlign: "center", color: "#475569" }}
+                      >
+                        {Number(item.stok_karawang || 0).toLocaleString(
+                          "id-ID",
+                        )}
+                      </td>
+
+                      <td>
+                        <input
+                          type="number"
+                          min={0}
+                          placeholder={sisa > 0 ? String(sisa) : "0"}
+                          value={rowQty[item.item] ?? ""}
+                          onChange={(e) =>
+                            setRowQty((prev) => ({
+                              ...prev,
+                              [item.item]: e.target.value,
+                            }))
+                          }
+                          style={{
+                            width: 78,
+                            padding: "6px 8px",
+                            border: "1px solid #cbd5e1",
+                            borderRadius: 6,
+                            fontSize: 12,
+                            fontWeight: 700,
+                            textAlign: "center",
+                          }}
+                        />
+                      </td>
+
+                      <td>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <select
+                            value={rowTripSelect[item.item] || "__new__"}
+                            onChange={(e) =>
+                              setRowTripSelect((prev) => ({
+                                ...prev,
+                                [item.item]: e.target.value,
+                              }))
+                            }
+                            style={{
+                              padding: "6px 8px",
+                              border: "1px solid #cbd5e1",
+                              borderRadius: 6,
+                              fontSize: 12,
+                              fontWeight: 600,
+                              color: "#334155",
+                              minWidth: 130,
+                            }}
+                          >
+                            <option value="__new__">+ Trip Baru</option>
+                            {manualTrips.map((trip) => (
+                              <option key={trip.id} value={trip.id}>
+                                {trip.no_trip}
+                              </option>
+                            ))}
+                          </select>
+
+                          <button
+                            type="button"
+                            onClick={() => assignItemToTrip(item)}
+                            title="Masukkan ke trip"
+                            style={{
+                              height: 30,
+                              width: 30,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              border: "1px solid #bfdbfe",
+                              background: "#eff6ff",
+                              color: "#1d4ed8",
+                              borderRadius: 6,
+                              cursor: "pointer",
+                              flexShrink: 0,
+                            }}
+                          >
+                            <ArrowRight size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* ================= MANUAL TRIP BUILDER ================= */}
+      <div
+        className="ko-card"
+        style={{
+          marginTop: 20,
+          padding: 20,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            marginBottom: 16,
+            flexWrap: "wrap",
+          }}
+        >
+          <h2 style={{ fontSize: 15, fontWeight: 800, color: "#0f172a", margin: 0 }}>
+            Trip Manual
+          </h2>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               type="button"
-              onClick={handleExportTireTripPlan}
+              onClick={addManualTrip}
               style={{
                 height: 34,
                 display: "flex",
                 alignItems: "center",
                 gap: 6,
-                padding: "0 12px",
-                border: "1px solid #bbf7d0",
-                background: "#fff",
+                padding: "0 14px",
+                border: "1px solid #bfdbfe",
+                background: "#eff6ff",
                 borderRadius: 8,
                 cursor: "pointer",
                 fontSize: 12,
                 fontWeight: 700,
-                color: "#15803d",
-              }}
-              title="Export hasil Trip Plan ke Excel"
-            >
-              <Download size={15} />
-              Export Excel
-            </button>
-          )}
-
-          {tireTripPlan && (
-            <button
-              type="button"
-              onClick={handleSaveTripPlan}
-              disabled={savingTripPlan}
-              style={{
-                height: 34,
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "0 12px",
-                border: "1px solid #bfdbfe",
-                background: "#fff",
-                borderRadius: 8,
-                cursor: savingTripPlan ? "not-allowed" : "pointer",
-                fontSize: 12,
-                fontWeight: 700,
                 color: "#1d4ed8",
-                opacity: savingTripPlan ? 0.6 : 1,
               }}
-              title="Simpan No Trip, item, qty request & total volume ke histori"
             >
-              {savingTripPlan ? (
-                <Loader2 size={15} className="ko-spin" />
-              ) : (
-                <Save size={15} />
-              )}
-              {savingTripPlan ? "Menyimpan..." : "Simpan Trip Plan"}
+              <Plus size={14} />
+              Tambah Trip Baru
             </button>
-          )}
+
+            {manualTrips.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={resetManualTripPlan}
+                  style={{
+                    height: 34,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "0 14px",
+                    border: "1px solid #fecaca",
+                    background: "#fff",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: "#dc2626",
+                  }}
+                >
+                  <RotateCcw size={14} />
+                  Reset
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExportManualTripPlan}
+                  style={{
+                    height: 34,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "0 14px",
+                    border: "1px solid #bbf7d0",
+                    background: "#fff",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: "#15803d",
+                  }}
+                >
+                  <Download size={14} />
+                  Export Excel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveManualTripPlan}
+                  disabled={savingTripPlan}
+                  style={{
+                    height: 34,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "0 14px",
+                    border: "1px solid #93c5fd",
+                    background: "#2563eb",
+                    borderRadius: 8,
+                    cursor: savingTripPlan ? "not-allowed" : "pointer",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: "#fff",
+                    opacity: savingTripPlan ? 0.7 : 1,
+                  }}
+                >
+                  {savingTripPlan ? (
+                    <Loader2 size={14} className="ko-spin" />
+                  ) : (
+                    <Save size={14} />
+                  )}
+                  {savingTripPlan ? "Menyimpan..." : "Simpan Trip Plan"}
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
-        {/* LOAD BUTTON */}
-        {!tireTripPlan && (
-          <button
-            type="button"
-            className="ko-btn-primary"
-            onClick={() => loadTireTripPlan()}
-            disabled={loadingTripPlan}
+        {manualTrips.length > 0 && (
+          <div
             style={{
-              width: "auto",
+              display: "grid",
+              gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+              gap: 10,
+              marginBottom: 18,
             }}
           >
-            {loadingTripPlan ? (
-              <Loader2 size={15} className="ko-spin" />
-            ) : (
-              <Package size={15} />
-            )}
-            Buat Trip Plan
-          </button>
+            {[
+              ["Trip", manualTripTotals.jumlahTrip],
+              ["Baris Item", manualTripTotals.totalItemLines],
+              ["Qty", manualTripTotals.totalQty.toLocaleString("id-ID")],
+              [
+                "Volume",
+                `${manualTripTotals.totalVolume.toLocaleString("id-ID", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })} m³`,
+              ],
+            ].map(([label, value]) => (
+              <div
+                key={label}
+                style={{
+                  background: "#f8fafc",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 10,
+                  padding: "12px 14px",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 10,
+                    color: "#94a3b8",
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {label}
+                </div>
+
+                <div
+                  style={{
+                    fontSize: 20,
+                    fontWeight: 800,
+                    color: "#0f172a",
+                    marginTop: 5,
+                  }}
+                >
+                  {value}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
 
-        {/* SUMMARY */}
-        {tireTripPlan && (
-          <>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                gap: 10,
-                marginBottom: 10,
-              }}
-            >
-              {[
-                ["Item", tireTripPlan.total_item],
-                [
-                  "Request",
-                  Number(tireTripPlan.total_request).toLocaleString("id-ID"),
-                ],
-                ["Trip", tireTripPlan.jumlah_trip],
-              ].map(([label, value]) => (
+        {manualTrips.length === 0 && (
+          <div
+            style={{
+              textAlign: "center",
+              padding: "36px 0",
+              color: "#94a3b8",
+              fontSize: 13,
+            }}
+          >
+            Belum ada trip. Klik <strong>Tambah Trip Baru</strong>, atau langsung
+            pilih trip dari tabel preview di atas.
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {manualTrips.map((trip) => {
+            const tripQty = trip.items.reduce(
+              (sum, i) => sum + Number(i.qty || 0),
+              0,
+            );
+            const tripVolume = trip.items.reduce(
+              (sum, i) => sum + Number(i.total_volume || 0),
+              0,
+            );
+
+            return (
+              <div
+                key={trip.id}
+                style={{
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 12,
+                  overflow: "hidden",
+                }}
+              >
+                {/* TRIP HEADER */}
                 <div
-                  key={label}
                   style={{
+                    padding: "10px 14px",
                     background: "#f8fafc",
-                    border: "1px solid #e2e8f0",
-                    borderRadius: 10,
-                    padding: "12px 14px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    flexWrap: "wrap",
                   }}
                 >
-                  <div
-                    style={{
-                      fontSize: 10,
-                      color: "#94a3b8",
-                      fontWeight: 600,
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    {label}
-                  </div>
-
-                  <div
-                    style={{
-                      fontSize: 20,
-                      fontWeight: 800,
-                      color: "#0f172a",
-                      marginTop: 5,
-                    }}
-                  >
-                    {value}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                gap: 10,
-                marginBottom: 18,
-              }}
-            >
-              {[
-                ["Qty", Number(tireTripPlan.total_qty).toLocaleString("id-ID")],
-                [
-                  "Selisih",
-                  Number(
-                    tireTripPlan.total_request - tireTripPlan.total_qty,
-                  ).toLocaleString("id-ID"),
-                ],
-                [
-                  "Volume",
-                  `${Number(tireTripPlan.total_volume).toLocaleString("id-ID", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })} m³`,
-                ],
-              ].map(([label, value]) => (
-                <div
-                  key={label}
-                  style={{
-                    background: "#f8fafc",
-                    border: "1px solid #e2e8f0",
-                    borderRadius: 10,
-                    padding: "12px 14px",
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 10,
-                      color: "#94a3b8",
-                      fontWeight: 600,
-                      textTransform: "uppercase",
-                    }}
-                  >
-                    {label}
-                  </div>
-
-                  <div
-                    style={{
-                      fontSize: 20,
-                      fontWeight: 800,
-                      color:
-                        label === "Selisih" &&
-                        Number(
-                          tireTripPlan.total_request - tireTripPlan.total_qty,
-                        ) !== 0
-                          ? "#dc2626"
-                          : "#0f172a",
-                      marginTop: 5,
-                    }}
-                  >
-                    {value}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* TRIPS */}
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 12,
-              }}
-            >
-              {tireTripPlan.trips.map((trip) => (
-                <div
-                  key={trip.trip}
-                  style={{
-                    border: "1px solid #e2e8f0",
-                    borderRadius: 12,
-                    overflow: "hidden",
-                  }}
-                >
-                  {/* TRIP HEADER */}
-                  <div
-                    style={{
-                      padding: "12px 14px",
-                      background: "#f8fafc",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 12,
-                    }}
-                  >
-                    <div>
-                      <strong
-                        style={{
-                          fontSize: 14,
-                          color: "#0f172a",
-                        }}
-                      >
-                        {trip.do_number || `Trip ${trip.trip}`}
-                      </strong>
-
-                      <div
-                        style={{
-                          fontSize: 11,
-                          color: "#94a3b8",
-                          marginTop: 3,
-                        }}
-                      >
-                        Trip {trip.trip} · {trip.total_qty.toLocaleString("id-ID")} Qty
-                      </div>
-                    </div>
-
-                    <div style={{ textAlign: "right" }}>
-                      <div
-                        style={{
-                          fontSize: 16,
-                          fontWeight: 800,
-                          color: "#16a34a",
-                        }}
-                      >
-                        {trip.total_volume.toLocaleString("id-ID", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}{" "}
-                        m³
-                      </div>
-
-                      <div
-                        style={{
-                          fontSize: 10,
-                          color: "#64748b",
-                        }}
-                      >
-                        {trip.utilization}% terisi
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* PROGRESS */}
-                  <div
-                    style={{
-                      height: 6,
-                      background: "#e2e8f0",
-                      margin: "0 14px",
-                    }}
-                  >
-                    <div
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input
+                      type="text"
+                      value={trip.no_trip}
+                      onChange={(e) =>
+                        updateManualTripNo(trip.id, e.target.value)
+                      }
                       style={{
-                        height: "100%",
-                        width: `${Math.min(trip.utilization, 100)}%`,
-                        background: "#16a34a",
-                        transition: "width 0.2s ease",
+                        fontSize: 13.5,
+                        fontWeight: 800,
+                        color: "#0f172a",
+                        border: "1px solid #cbd5e1",
+                        borderRadius: 6,
+                        padding: "6px 8px",
+                        width: 170,
                       }}
                     />
+
+                    <span style={{ fontSize: 11, color: "#94a3b8" }}>
+                      {tripQty.toLocaleString("id-ID")} Qty
+                    </span>
                   </div>
 
-                  {/* ITEMS */}
-                  <div
-                    style={{
-                      padding: 12,
-                    }}
-                  >
+                  <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                     <div
                       style={{
-                        overflowX: "auto",
+                        fontSize: 15,
+                        fontWeight: 800,
+                        color: "#16a34a",
                       }}
                     >
-                      <table
-                        className="ko-data-table"
-                        style={{
-                          margin: 0,
-                        }}
-                      >
+                      {tripVolume.toLocaleString("id-ID", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}{" "}
+                      m³
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => removeManualTrip(trip.id)}
+                      title="Hapus trip"
+                      style={{
+                        height: 30,
+                        width: 30,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        border: "1px solid #fecaca",
+                        background: "#fff",
+                        color: "#dc2626",
+                        borderRadius: 6,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* ITEMS */}
+                {trip.items.length === 0 ? (
+                  <div
+                    style={{
+                      padding: "16px 14px",
+                      color: "#94a3b8",
+                      fontSize: 12,
+                    }}
+                  >
+                    Belum ada item di trip ini. Pilih trip ini dari tabel preview
+                    di atas.
+                  </div>
+                ) : (
+                  <div style={{ padding: 12 }}>
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="ko-data-table" style={{ margin: 0 }}>
                         <thead>
                           <tr>
                             <th>Item</th>
                             <th>Deskripsi</th>
-                            <th>Request</th>
-                            <th>Actual</th>
-                            <th>Selisih</th>
+                            <th>Qty</th>
                             <th>Vol/Qty</th>
                             <th>Total Volume</th>
+                            <th></th>
                           </tr>
                         </thead>
 
                         <tbody>
-                          {trip.items.map((item, index) => {
-                            const requestQty = Number(item.request_qty || 0);
-                            const actualQty = Number(item.qty || 0);
-                            const selisih = actualQty - requestQty;
-
-                            return (
-                              <tr key={`${trip.trip}-${item.item}-${index}`}>
-                                {/* ITEM */}
-                                <td className="ko-mono">{item.item}</td>
-
-                                {/* DESKRIPSI */}
-                                <td>{item.deskripsi || "-"}</td>
-
-                                {/* REQUEST */}
-                                <td
-                                  className="ko-mono"
+                          {trip.items.map((item) => (
+                            <tr key={`${trip.id}-${item.item}`}>
+                              <td className="ko-mono">{item.item}</td>
+                              <td>{item.deskripsi || "-"}</td>
+                              <td
+                                className="ko-mono"
+                                style={{ textAlign: "center", fontWeight: 700 }}
+                              >
+                                {Number(item.qty || 0).toLocaleString("id-ID")}
+                              </td>
+                              <td>
+                                {Number(item.volume || 0).toLocaleString(
+                                  "id-ID",
+                                  { minimumFractionDigits: 3, maximumFractionDigits: 3 },
+                                )}{" "}
+                                m³
+                              </td>
+                              <td style={{ fontWeight: 700 }}>
+                                {Number(item.total_volume || 0).toLocaleString(
+                                  "id-ID",
+                                  { minimumFractionDigits: 2, maximumFractionDigits: 2 },
+                                )}{" "}
+                                m³
+                              </td>
+                              <td>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    removeItemFromManualTrip(trip.id, item.item)
+                                  }
+                                  title="Hapus item dari trip"
                                   style={{
-                                    textAlign: "center",
-                                    fontWeight: 700,
-                                    color: "#475569",
+                                    height: 26,
+                                    width: 26,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    border: "1px solid #fecaca",
+                                    background: "#fff",
+                                    color: "#dc2626",
+                                    borderRadius: 6,
+                                    cursor: "pointer",
                                   }}
                                 >
-                                  {requestQty.toLocaleString("id-ID")}
-                                </td>
-
-                                {/* ACTUAL */}
-                                <td className="ko-mono">
-                                  <div
-                                    style={{
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "center",
-                                      gap: 5,
-                                      whiteSpace: "nowrap",
-                                    }}
-                                  >
-                                    {/* MINUS */}
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        updateTripItemQty(
-                                          trip.trip,
-                                          item.item,
-                                          -5,
-                                        )
-                                      }
-                                      disabled={actualQty <= 0}
-                                      title="Kurangi 5"
-                                      style={{
-                                        width: 28,
-                                        height: 28,
-                                        border: "1px solid #cbd5e1",
-                                        background: "#fff",
-                                        borderRadius: 6,
-                                        cursor:
-                                          actualQty <= 0
-                                            ? "not-allowed"
-                                            : "pointer",
-                                        fontSize: 17,
-                                        fontWeight: 700,
-                                        color:
-                                          actualQty <= 0
-                                            ? "#cbd5e1"
-                                            : "#475569",
-                                        display: "flex",
-                                        alignItems: "center",
-                                        justifyContent: "center",
-                                      }}
-                                    >
-                                      −
-                                    </button>
-
-                                    {/* ACTUAL QTY */}
-                                    <span
-                                      style={{
-                                        minWidth: 50,
-                                        textAlign: "center",
-                                        fontWeight: 800,
-                                        color: "#0f172a",
-                                      }}
-                                    >
-                                      {actualQty.toLocaleString("id-ID")}
-                                    </span>
-
-                                    {/* PLUS */}
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        updateTripItemQty(
-                                          trip.trip,
-                                          item.item,
-                                          5,
-                                        )
-                                      }
-                                      title="Tambah 5"
-                                      style={{
-                                        width: 28,
-                                        height: 28,
-                                        border: "1px solid #cbd5e1",
-                                        background: "#fff",
-                                        borderRadius: 6,
-                                        cursor: "pointer",
-                                        fontSize: 17,
-                                        fontWeight: 700,
-                                        color: "#475569",
-                                        display: "flex",
-                                        alignItems: "center",
-                                        justifyContent: "center",
-                                      }}
-                                    >
-                                      +
-                                    </button>
-                                  </div>
-                                </td>
-
-                                {/* SELISIH */}
-                                <td
-                                  className="ko-mono"
-                                  style={{
-                                    textAlign: "center",
-                                    fontWeight: 800,
-                                    color:
-                                      selisih === 0
-                                        ? "#16a34a"
-                                        : selisih > 0
-                                          ? "#2563eb"
-                                          : "#dc2626",
-                                  }}
-                                >
-                                  {selisih > 0 ? "+" : ""}
-                                  {selisih.toLocaleString("id-ID")}
-                                </td>
-
-                                {/* VOLUME / QTY */}
-                                <td>
-                                  {Number(item.volume || 0).toLocaleString(
-                                    "id-ID",
-                                    {
-                                      minimumFractionDigits: 3,
-                                      maximumFractionDigits: 3,
-                                    },
-                                  )}{" "}
-                                  m³
-                                </td>
-
-                                {/* TOTAL VOLUME */}
-                                <td
-                                  style={{
-                                    fontWeight: 700,
-                                  }}
-                                >
-                                  {Number(
-                                    item.total_volume || 0,
-                                  ).toLocaleString("id-ID", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })}{" "}
-                                  m³
-                                </td>
-                              </tr>
-                            );
-                          })}
+                                  <X size={13} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
                         </tbody>
                       </table>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {showUploadModal && (

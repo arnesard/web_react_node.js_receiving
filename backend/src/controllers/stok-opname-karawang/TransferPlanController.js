@@ -4,9 +4,22 @@
 // dari bpw_dept_db.sch_oem (lihat KarawangItemRequestModel.getTireTripItems).
 const KarawangItemRequestModel = require("../../models/stok-opname-karawang/KarawangItemRequestModel");
 const KarawangTripPlanModel = require("../../models/stok-opname-karawang/KarawangTripPlanModel");
+const ControlStockModel = require("../../models/control-stock/ControlStockModel");
+const KarawangFifoModel = require("../../models/stok-opname-karawang/KarawangFifoModel");
+const { mapWithConcurrency } = require("../../utils/concurrency");
 
 const ExcelJS = require("exceljs");
 const response = require("../../utils/response");
+
+// Kode item di master_item / Item Request pakai suffix "-<angka>" di
+// belakang (mis. "IBD1002-0"), tapi kode item ASLI di database EDP
+// (fgloc/rack, dipakai Control Stock) dan Cross Docking (dipakai Control
+// FIFO) gak pakai suffix itu ("IBD1002" polos) — makanya query stok harus
+// pakai kode yang udah di-strip, biar ketemu. Kode aslinya (dengan suffix)
+// tetap dipakai buat ditampilkan & disimpan ke trip.
+function stripItemSuffix(itemCode) {
+  return String(itemCode || "").trim().replace(/-\d+$/, "");
+}
 
 class TransferPlanController {
   async uploadItemRequest(req, res) {
@@ -97,6 +110,72 @@ class TransferPlanController {
       console.error("TransferPlanController.itemRequestSummary gagal:", err);
 
       return response.error(res, "Gagal mengambil summary item request.");
+    }
+  }
+
+  // Preview manual: item request TIRE hari ini (qty request), di-enrich
+  // stok Tangerang (Control Stock, db pandu/EDP) & stok Karawang (Control
+  // FIFO, Cross Docking) per item — dipakai user buat MANUAL milih No
+  // Trip + item mana yang mau dimasukkan ke tiap trip (bukan auto
+  // bin-packing lagi). Concurrency dibatasi (3) biar gak nembak EDP &
+  // Cross Docking sekaligus buat semua item.
+  async previewItemRequest(req, res) {
+    try {
+      const items =
+        await KarawangItemRequestModel.getTireTripItemsFromRequestOnly();
+
+      if (items.length === 0) {
+        return response.success(res, []);
+      }
+
+      const enriched = await mapWithConcurrency(items, 3, async (item) => {
+        const lookupCode = stripItemSuffix(item.item);
+
+        let stokTangerang = 0;
+        let stokKarawang = 0;
+
+        try {
+          // Stok Tangerang cuma dihitung kategori OE (bukan OK+OE gabungan)
+          const dataTangerang = await ControlStockModel.findLocationsByItem(
+            lookupCode,
+            "OE",
+          );
+          stokTangerang = dataTangerang?.summary?.total_qty || 0;
+        } catch (err) {
+          console.error(
+            `previewItemRequest: gagal ambil stok Tangerang untuk ${item.item} (lookup ${lookupCode}):`,
+            err.message,
+          );
+        }
+
+        try {
+          const dataKarawang = await KarawangFifoModel.locationsByItem(
+            lookupCode,
+            "all",
+          );
+          stokKarawang = dataKarawang?.summary?.total_qty || 0;
+        } catch (err) {
+          console.error(
+            `previewItemRequest: gagal ambil stok Karawang untuk ${item.item} (lookup ${lookupCode}):`,
+            err.message,
+          );
+        }
+
+        return {
+          ...item,
+          stok_tangerang: stokTangerang,
+          stok_karawang: stokKarawang,
+        };
+      });
+
+      return response.success(res, enriched);
+    } catch (err) {
+      console.error("TransferPlanController.previewItemRequest gagal:", err);
+
+      return response.error(
+        res,
+        "Gagal mengambil preview item request beserta stok.",
+      );
     }
   }
 
