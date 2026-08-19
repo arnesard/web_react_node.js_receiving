@@ -37,6 +37,9 @@ export default function TransferPlanPage() {
   const [uploadingFile, setUploadingFile] = useState(false);
 
   const [savingTripPlan, setSavingTripPlan] = useState(false);
+  // Tabel "Preview Item Request & Stok" disembunyikan di halaman utama,
+  // baru muncul setelah tombol "Rencana Transfer" diklik.
+  const [showPreviewTable, setShowPreviewTable] = useState(false);
 
   const [summaryItemReq, setSummaryItemReq] = useState([]);
 
@@ -52,7 +55,6 @@ export default function TransferPlanPage() {
   // Kapasitas 1 truk (m³) — dipakai buat ngecek trip udah "muat" apa belum.
   // Default 52 m³, samain sama default kapasitas di buildTireTrips backend.
   const [truckCapacity, setTruckCapacity] = useState(52);
-  const [buildingRencanaTransfer, setBuildingRencanaTransfer] = useState(false);
   // Input qty & pilihan trip tujuan per baris item di tabel preview.
   const [rowQty, setRowQty] = useState({});
   const [rowTripSelect, setRowTripSelect] = useState({});
@@ -258,174 +260,10 @@ export default function TransferPlanPage() {
       ? Math.ceil(manualTripTotals.totalVolume / truckCapacity)
       : 0;
 
-  // "Rencana Transfer" — auto-generate trip baru dari SISA qty di tabel
-  // Preview Item Request & Stok (yang belum dimasukkan ke trip manapun),
-  // disusun (bin-packing) supaya tiap trip gak lewat truckCapacity.
-  // Trip manual yang udah ada gak diapa-apain, ini cuma nambah trip baru.
-  const handleRencanaTransfer = async () => {
-    if (!previewItems.length) {
-      Swal.fire(
-        "Belum Ada Data",
-        "Belum ada Preview Item Request & Stok buat direncanakan.",
-        "warning",
-      );
-      return;
-    }
-
-    const capacity = Number(truckCapacity) || 0;
-    if (capacity <= 0) {
-      Swal.fire(
-        "Kapasitas Truk Belum Diisi",
-        "Isi dulu Kapasitas Truk (m³) di atas sebelum bikin rencana transfer.",
-        "warning",
-      );
-      return;
-    }
-
-    // Sisa qty = qty request dikurangi yang udah kepasang di trip manapun
-    // (sama persis kolom "Sisa" di tabel Preview Item Request & Stok).
-    const sisaItems = previewItems
-      .map((item) => {
-        const allocated = Number(allocatedQtyMap[item.item] || 0);
-        const sisa = Number(item.qty || 0) - allocated;
-        return { ...item, qty: sisa };
-      })
-      .filter((item) => item.qty > 0);
-
-    if (!sisaItems.length) {
-      Swal.fire(
-        "Semua Item Sudah Masuk Trip",
-        "Sisa qty semua item di Preview Item Request & Stok sudah 0.",
-        "info",
-      );
-      return;
-    }
-
-    const confirm = await Swal.fire({
-      title: "Rencana Transfer Otomatis?",
-      html: `Sistem bakal bikin trip baru otomatis dari <strong>${sisaItems.length}</strong> item (sisa qty di Preview Item Request &amp; Stok), disusun sesuai kapasitas truk <strong>${capacity} m³</strong>. Trip manual yang sudah ada gak akan diubah.`,
-      icon: "question",
-      showCancelButton: true,
-      confirmButtonText: "Ya, Rencanakan",
-      cancelButtonText: "Batal",
-      confirmButtonColor: "#2563eb",
-    });
-
-    if (!confirm.isConfirmed) return;
-
-    setBuildingRencanaTransfer(true);
-
-    try {
-      // Bin-packing best-fit, sama logikanya kayak buildTireTrips di backend.
-      const generatedTrips = [];
-
-      sisaItems.forEach((item) => {
-        let qtyRemaining = Number(item.qty || 0);
-        const volumePerQty = Number(item.volume || 0);
-        const beratPerQty = Number(item.berat || 0);
-
-        if (qtyRemaining <= 0) return;
-
-        const pushItem = (trip, qtyToPut) => {
-          const volume = Number((qtyToPut * volumePerQty).toFixed(3));
-          const berat = Number((qtyToPut * beratPerQty).toFixed(2));
-          const idx = trip.items.findIndex((i) => i.item === item.item);
-
-          if (idx >= 0) {
-            trip.items[idx].qty += qtyToPut;
-            trip.items[idx].total_volume = Number(
-              (trip.items[idx].total_volume + volume).toFixed(3),
-            );
-            trip.items[idx].total_berat = Number(
-              (trip.items[idx].total_berat + berat).toFixed(2),
-            );
-          } else {
-            trip.items.push({
-              item: item.item,
-              deskripsi: item.deskripsi,
-              qty: qtyToPut,
-              volume: volumePerQty,
-              total_volume: volume,
-              berat: beratPerQty,
-              total_berat: berat,
-            });
-          }
-
-          trip.total_volume += volume;
-        };
-
-        // Item tanpa data volume → taro aja di trip terakhir apa adanya.
-        if (volumePerQty <= 0) {
-          let trip = generatedTrips[generatedTrips.length - 1];
-          if (!trip) {
-            trip = { total_volume: 0, items: [] };
-            generatedTrips.push(trip);
-          }
-          pushItem(trip, qtyRemaining);
-          return;
-        }
-
-        while (qtyRemaining > 0) {
-          let targetTrip = null;
-          let bestRemaining = Infinity;
-
-          generatedTrips.forEach((trip) => {
-            const remainingCapacity = capacity - trip.total_volume;
-            if (
-              remainingCapacity >= volumePerQty &&
-              remainingCapacity < bestRemaining
-            ) {
-              targetTrip = trip;
-              bestRemaining = remainingCapacity;
-            }
-          });
-
-          if (!targetTrip) {
-            targetTrip = { total_volume: 0, items: [] };
-            generatedTrips.push(targetTrip);
-          }
-
-          const availableVolume = capacity - targetTrip.total_volume;
-          const maxQty = Math.floor(
-            (availableVolume + Number.EPSILON) / volumePerQty,
-          );
-          let qtyToPut = Math.min(qtyRemaining, maxQty);
-
-          // Kalau 1 pcs item ini aja udah lebih besar dari kapasitas truk,
-          // tetap masukkan 1 pcs (over kapasitas) biar gak infinite loop.
-          if (qtyToPut <= 0) {
-            if (targetTrip.items.length === 0) {
-              qtyToPut = 1;
-            } else {
-              targetTrip = { total_volume: 0, items: [] };
-              generatedTrips.push(targetTrip);
-              continue;
-            }
-          }
-
-          pushItem(targetTrip, qtyToPut);
-          qtyRemaining -= qtyToPut;
-        }
-      });
-
-      setManualTrips((prev) => {
-        const startSeq = prev.length + 1;
-        const newTrips = generatedTrips.map((t, idx) => ({
-          id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${idx}`,
-          no_trip: generateManualDoNumber(startSeq + idx),
-          items: t.items,
-        }));
-        return [...prev, ...newTrips];
-      });
-
-      Swal.fire(
-        "Rencana Transfer Dibuat",
-        `${generatedTrips.length} trip baru otomatis dibuat dari ${sisaItems.length} item.`,
-        "success",
-      );
-    } finally {
-      setBuildingRencanaTransfer(false);
-    }
+  // "Rencana Transfer" — sekarang cuma buka modal yang isinya tabel
+  // Preview Item Request & Stok. Gak ada lagi auto-generate trip.
+  const handleRencanaTransfer = () => {
+    setShowPreviewTable(true);
   };
 
   const generateManualDoNumber = (sequence) => {
@@ -640,6 +478,7 @@ export default function TransferPlanPage() {
   const buildRmbWorksheet = (trip, header) => {
     const items = trip.items || [];
     const ws = {};
+    const merges = [];
 
     const put = (addr, value, style) => {
       ws[addr] = {
@@ -647,6 +486,19 @@ export default function TransferPlanPage() {
         t: typeof value === "number" ? "n" : "s",
         s: style,
       };
+    };
+
+    // Nulis 1 "kolom logis" tabel yang sebenarnya gabungan beberapa kolom
+    // Excel (biar gak ada kotak/border kepotong-potong kayak sebelumnya).
+    // colStart/colEnd = huruf kolom Excel, rowNum = nomor baris (1-based).
+    const putCell = (rowNum, colStart, colEnd, value, style) => {
+      put(`${colStart}${rowNum}`, value, style);
+      if (colStart !== colEnd) {
+        merges.push({
+          s: { r: rowNum - 1, c: XLSX.utils.decode_col(colStart) },
+          e: { r: rowNum - 1, c: XLSX.utils.decode_col(colEnd) },
+        });
+      }
     };
 
     const labelStyle = { font: { bold: true, sz: 10 } };
@@ -673,6 +525,25 @@ export default function TransferPlanPage() {
     const cellRight = {
       ...cellStyle,
       alignment: { horizontal: "right", vertical: "center" },
+    };
+
+    // Kolom tabel dari kiri ke kanan, tiap grup boleh gabungan beberapa
+    // kolom Excel (biar lega) tapi tetap NYAMBUNG satu sama lain (gak ada
+    // kolom kosong di antaranya) supaya border-nya jadi 1 kotak rapi.
+    const COL = {
+      no: ["B", "B"],
+      kodeItem: ["C", "E"],
+      deskripsi: ["F", "G"],
+      kirim: ["H", "I"],
+      extra: ["J", "J"],
+      sInv: ["K", "K"],
+      stok: ["L", "L"],
+      aktual: ["M", "P"],
+      uom: ["Q", "Q"],
+      m3: ["R", "S"],
+      shippIns: ["T", "U"],
+      packIns: ["V", "V"],
+      noSo: ["W", "W"],
     };
 
     const today = new Date().toLocaleDateString("id-ID");
@@ -731,22 +602,19 @@ export default function TransferPlanPage() {
     put("N14", header.lpn || "", valueStyle);
 
     // ---- Header tabel ----
-    [
-      ["B16", "NO."],
-      ["C16", "KODE ITEM"],
-      ["F16", "DESKRIPSI"],
-      ["H16", "KIRIM"],
-      ["J16", "EXTRA"],
-      ["K16", "S.INV"],
-      ["L16", "STOK"],
-      ["M16", "AKTUAL"],
-      ["Q16", "UOM"],
-      ["R16", "M3"],
-      ["S16", "KG"],
-      ["T16", "SHIPP.INS."],
-      ["V16", "PACK.INS."],
-      ["W16", "NO SO."],
-    ].forEach(([addr, val]) => put(addr, val, theadStyle));
+    putCell(16, ...COL.no, "NO.", theadStyle);
+    putCell(16, ...COL.kodeItem, "KODE ITEM", theadStyle);
+    putCell(16, ...COL.deskripsi, "DESKRIPSI", theadStyle);
+    putCell(16, ...COL.kirim, "KIRIM", theadStyle);
+    putCell(16, ...COL.extra, "EXTRA", theadStyle);
+    putCell(16, ...COL.sInv, "S.INV", theadStyle);
+    putCell(16, ...COL.stok, "STOK", theadStyle);
+    putCell(16, ...COL.aktual, "AKTUAL", theadStyle);
+    putCell(16, ...COL.uom, "UOM", theadStyle);
+    putCell(16, ...COL.m3, "M3", theadStyle);
+    putCell(16, ...COL.shippIns, "SHIPP.INS.", theadStyle);
+    putCell(16, ...COL.packIns, "PACK.INS.", theadStyle);
+    putCell(16, ...COL.noSo, "NO SO.", theadStyle);
 
     // ---- Baris item ----
     let row = 17;
@@ -765,20 +633,19 @@ export default function TransferPlanPage() {
       totalM3 += volume;
       totalKg += berat;
 
-      put(`B${row}`, idx + 1, cellCenter);
-      put(`C${row}`, item.item || "", cellStyle);
-      put(`F${row}`, item.deskripsi || "", cellStyle);
-      put(`H${row}`, qty, cellRight);
-      put(`J${row}`, "", cellCenter);
-      put(`K${row}`, "BPW1", cellCenter);
-      put(`L${row}`, "", cellCenter);
-      put(`M${row}`, "", cellCenter);
-      put(`Q${row}`, "PCS", cellCenter);
-      put(`R${row}`, Number(volume.toFixed(3)), cellRight);
-      put(`S${row}`, Number(berat.toFixed(2)), cellRight);
-      put(`T${row}`, "", cellStyle);
-      put(`V${row}`, "", cellStyle);
-      put(`W${row}`, header.no_so || "", cellCenter);
+      putCell(row, ...COL.no, idx + 1, cellCenter);
+      putCell(row, ...COL.kodeItem, item.item || "", cellStyle);
+      putCell(row, ...COL.deskripsi, item.deskripsi || "", cellStyle);
+      putCell(row, ...COL.kirim, qty, cellRight);
+      putCell(row, ...COL.extra, "", cellCenter);
+      putCell(row, ...COL.sInv, "BPW1", cellCenter);
+      putCell(row, ...COL.stok, "", cellCenter);
+      putCell(row, ...COL.aktual, "", cellCenter);
+      putCell(row, ...COL.uom, "PCS", cellCenter);
+      putCell(row, ...COL.m3, Number(volume.toFixed(3)), cellRight);
+      putCell(row, ...COL.shippIns, "", cellStyle);
+      putCell(row, ...COL.packIns, "", cellStyle);
+      putCell(row, ...COL.noSo, header.no_so || "", cellCenter);
 
       row += 1;
     });
@@ -840,7 +707,7 @@ export default function TransferPlanPage() {
       { wch: 13 },
       { wch: 10 },
     ];
-    ws["!merges"] = [XLSX.utils.decode_range("F6:N6")];
+    ws["!merges"] = [XLSX.utils.decode_range("F6:N6"), ...merges];
 
     return ws;
   };
@@ -1394,269 +1261,321 @@ export default function TransferPlanPage() {
         </div>
       </div>
 
-      {/* ================= PREVIEW ITEM REQUEST + STOK ================= */}
-      <div
-        className="ko-card"
-        style={{
-          marginTop: 20,
-          padding: 20,
-        }}
-      >
+      {/* ================= PREVIEW ITEM REQUEST + STOK (MODAL) ================= */}
+      {/* Disembunyikan dari halaman utama; cuma muncul sebagai modal setelah
+          tombol "Rencana Transfer" (di section Trip Manual di bawah) diklik. */}
+      {showPreviewTable && (
         <div
           style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.65)",
+            backdropFilter: "blur(3px)",
+            WebkitBackdropFilter: "blur(3px)",
             display: "flex",
             alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-            marginBottom: 14,
+            justifyContent: "center",
+            zIndex: 9999,
+            padding: 16,
+          }}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setShowPreviewTable(false);
           }}
         >
-          <div>
-            <h2
+          <div
+            className="ko-card"
+            style={{
+              width: "100%",
+              maxWidth: 1400,
+              maxHeight: "90vh",
+              overflowY: "auto",
+              padding: 20,
+              boxShadow: "0 25px 70px rgba(0,0,0,0.25)",
+            }}
+          >
+            <div
               style={{
-                fontSize: 15,
-                fontWeight: 800,
-                color: "#0f172a",
-                margin: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                marginBottom: 14,
               }}
             >
-              Preview Item Request &amp; Stok
-            </h2>
-            <p style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 4 }}>
-              Item TIRE dari Item Request hari ini, lengkap stok Tangerang
-              (Control Stock) &amp; stok Karawang (Control FIFO). Pilih No Trip
-              &amp; qty manual per item di bawah.
-            </p>
-          </div>
+              <div>
+                <h2
+                  style={{
+                    fontSize: 15,
+                    fontWeight: 800,
+                    color: "#0f172a",
+                    margin: 0,
+                  }}
+                >
+                  Preview Item Request &amp; Stok
+                </h2>
+              </div>
 
-          <button
-            type="button"
-            onClick={loadPreview}
-            disabled={loadingPreview}
-            style={{
-              height: 34,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "0 14px",
-              border: "1px solid #cbd5e1",
-              background: "#fff",
-              color: "#334155",
-              borderRadius: 8,
-              cursor: loadingPreview ? "not-allowed" : "pointer",
-              fontSize: 12,
-              fontWeight: 700,
-              flexShrink: 0,
-            }}
-          >
-            {loadingPreview ? (
-              <Loader2 size={14} className="ko-spin" />
-            ) : (
-              <RefreshCw size={14} />
+              <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                <button
+                  type="button"
+                  onClick={loadPreview}
+                  disabled={loadingPreview}
+                  style={{
+                    height: 34,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "0 14px",
+                    border: "1px solid #cbd5e1",
+                    background: "#fff",
+                    color: "#334155",
+                    borderRadius: 8,
+                    cursor: loadingPreview ? "not-allowed" : "pointer",
+                    fontSize: 12,
+                    fontWeight: 700,
+                  }}
+                >
+                  {loadingPreview ? (
+                    <Loader2 size={14} className="ko-spin" />
+                  ) : (
+                    <RefreshCw size={14} />
+                  )}
+                  Refresh
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowPreviewTable(false)}
+                  title="Tutup"
+                  style={{
+                    height: 34,
+                    width: 34,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    border: "1px solid #cbd5e1",
+                    background: "#fff",
+                    color: "#334155",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                  }}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {loadingPreview && previewItems.length === 0 && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "36px 0",
+                  color: "#64748b",
+                  fontSize: 13,
+                  gap: 8,
+                }}
+              >
+                <Loader2 size={16} className="ko-spin" />
+                Memuat preview...
+              </div>
             )}
-            Refresh
-          </button>
-        </div>
 
-        {loadingPreview && previewItems.length === 0 && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: "36px 0",
-              color: "#64748b",
-              fontSize: 13,
-              gap: 8,
-            }}
-          >
-            <Loader2 size={16} className="ko-spin" />
-            Memuat preview...
-          </div>
-        )}
+            {!loadingPreview && previewItems.length === 0 && (
+              <div
+                style={{
+                  textAlign: "center",
+                  padding: "36px 0",
+                  color: "#94a3b8",
+                  fontSize: 13,
+                }}
+              >
+                Belum ada Item Request TIRE hari ini. Upload Item Request dulu
+                di atas.
+              </div>
+            )}
 
-        {!loadingPreview && previewItems.length === 0 && (
-          <div
-            style={{
-              textAlign: "center",
-              padding: "36px 0",
-              color: "#94a3b8",
-              fontSize: 13,
-            }}
-          >
-            Belum ada Item Request TIRE hari ini. Upload Item Request dulu di
-            atas.
-          </div>
-        )}
-
-        {previewItems.length > 0 && (
-          <div className="ko-preview-scroll" style={{ overflowX: "auto" }}>
-            <table className="ko-data-table" style={{ margin: 0 }}>
-              <thead>
-                <tr>
-                  <th>Item</th>
-                  <th>Deskripsi</th>
-                  <th>Qty Request</th>
-                  <th>Sudah Masuk Trip</th>
-                  <th>Sisa</th>
-                  <th>Stok Tangerang</th>
-                  <th>Stok Karawang</th>
-                  <th>Qty</th>
-                  <th>Masukkan ke Trip</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {previewItems.map((item) => {
-                  const allocated = Number(allocatedQtyMap[item.item] || 0);
-                  const sisa = Number(item.qty || 0) - allocated;
-
-                  return (
-                    <tr key={item.item}>
-                      <td className="ko-mono">{item.item}</td>
-
-                      <td>{item.deskripsi || "-"}</td>
-
-                      <td
-                        className="ko-mono"
-                        style={{ textAlign: "center", fontWeight: 700 }}
-                      >
-                        {Number(item.qty || 0).toLocaleString("id-ID")}
-                      </td>
-
-                      <td
-                        className="ko-mono"
-                        style={{
-                          textAlign: "center",
-                          color: allocated > 0 ? "#2563eb" : "#94a3b8",
-                          fontWeight: 700,
-                        }}
-                      >
-                        {allocated.toLocaleString("id-ID")}
-                      </td>
-
-                      <td
-                        className="ko-mono"
-                        style={{
-                          textAlign: "center",
-                          fontWeight: 800,
-                          color:
-                            sisa < 0
-                              ? "#dc2626"
-                              : sisa === 0
-                                ? "#16a34a"
-                                : "#0f172a",
-                        }}
-                      >
-                        {sisa.toLocaleString("id-ID")}
-                      </td>
-
-                      <td
-                        className="ko-mono"
-                        style={{ textAlign: "center", color: "#475569" }}
-                      >
-                        {Number(item.stok_tangerang || 0).toLocaleString(
-                          "id-ID",
-                        )}
-                      </td>
-
-                      <td
-                        className="ko-mono"
-                        style={{ textAlign: "center", color: "#475569" }}
-                      >
-                        {Number(item.stok_karawang || 0).toLocaleString(
-                          "id-ID",
-                        )}
-                      </td>
-
-                      <td>
-                        <input
-                          type="number"
-                          min={0}
-                          placeholder={sisa > 0 ? String(sisa) : "0"}
-                          value={rowQty[item.item] ?? ""}
-                          onChange={(e) =>
-                            setRowQty((prev) => ({
-                              ...prev,
-                              [item.item]: e.target.value,
-                            }))
-                          }
-                          style={{
-                            width: 78,
-                            padding: "6px 8px",
-                            border: "1px solid #cbd5e1",
-                            borderRadius: 6,
-                            fontSize: 12,
-                            fontWeight: 700,
-                            textAlign: "center",
-                          }}
-                        />
-                      </td>
-
-                      <td>
-                        <div
-                          style={{
-                            display: "flex",
-                            gap: 6,
-                            alignItems: "center",
-                          }}
-                        >
-                          <select
-                            value={rowTripSelect[item.item] || "__new__"}
-                            onChange={(e) =>
-                              setRowTripSelect((prev) => ({
-                                ...prev,
-                                [item.item]: e.target.value,
-                              }))
-                            }
-                            style={{
-                              padding: "6px 8px",
-                              border: "1px solid #cbd5e1",
-                              borderRadius: 6,
-                              fontSize: 12,
-                              fontWeight: 600,
-                              color: "#334155",
-                              minWidth: 130,
-                            }}
-                          >
-                            <option value="__new__">+ Trip Baru</option>
-                            {manualTrips.map((trip) => (
-                              <option key={trip.id} value={trip.id}>
-                                {trip.no_trip}
-                              </option>
-                            ))}
-                          </select>
-
-                          <button
-                            type="button"
-                            onClick={() => assignItemToTrip(item)}
-                            title="Masukkan ke trip"
-                            style={{
-                              height: 30,
-                              width: 30,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              border: "1px solid #bfdbfe",
-                              background: "#eff6ff",
-                              color: "#1d4ed8",
-                              borderRadius: 6,
-                              cursor: "pointer",
-                              flexShrink: 0,
-                            }}
-                          >
-                            <ArrowRight size={14} />
-                          </button>
-                        </div>
-                      </td>
+            {previewItems.length > 0 && (
+              <div className="ko-preview-scroll" style={{ overflowX: "auto" }}>
+                <table
+                  className="ko-data-table"
+                  style={{ margin: 0, minWidth: 1150 }}
+                >
+                  <thead>
+                    <tr>
+                      <th style={{ whiteSpace: "nowrap" }}>Item</th>
+                      <th style={{ whiteSpace: "nowrap" }}>Deskripsi</th>
+                      <th style={{ whiteSpace: "nowrap" }}>Qty Request</th>
+                      <th style={{ whiteSpace: "nowrap" }}>Sudah Masuk Trip</th>
+                      <th style={{ whiteSpace: "nowrap" }}>Sisa</th>
+                      <th style={{ whiteSpace: "nowrap" }}>Stok Tangerang</th>
+                      <th style={{ whiteSpace: "nowrap" }}>Stok Karawang</th>
+                      <th style={{ whiteSpace: "nowrap" }}>Qty</th>
+                      <th style={{ whiteSpace: "nowrap" }}>Masukkan ke Trip</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+
+                  <tbody>
+                    {previewItems.map((item) => {
+                      const allocated = Number(allocatedQtyMap[item.item] || 0);
+                      const sisa = Number(item.qty || 0) - allocated;
+
+                      return (
+                        <tr key={item.item}>
+                          <td
+                            className="ko-mono"
+                            style={{ whiteSpace: "nowrap" }}
+                          >
+                            {item.item}
+                          </td>
+
+                          <td style={{ whiteSpace: "nowrap" }}>
+                            {item.deskripsi || "-"}
+                          </td>
+
+                          <td
+                            className="ko-mono"
+                            style={{ textAlign: "center", fontWeight: 700 }}
+                          >
+                            {Number(item.qty || 0).toLocaleString("id-ID")}
+                          </td>
+
+                          <td
+                            className="ko-mono"
+                            style={{
+                              textAlign: "center",
+                              color: allocated > 0 ? "#2563eb" : "#94a3b8",
+                              fontWeight: 700,
+                            }}
+                          >
+                            {allocated.toLocaleString("id-ID")}
+                          </td>
+
+                          <td
+                            className="ko-mono"
+                            style={{
+                              textAlign: "center",
+                              fontWeight: 800,
+                              color:
+                                sisa < 0
+                                  ? "#dc2626"
+                                  : sisa === 0
+                                    ? "#16a34a"
+                                    : "#0f172a",
+                            }}
+                          >
+                            {sisa.toLocaleString("id-ID")}
+                          </td>
+
+                          <td
+                            className="ko-mono"
+                            style={{ textAlign: "center", color: "#475569" }}
+                          >
+                            {Number(item.stok_tangerang || 0).toLocaleString(
+                              "id-ID",
+                            )}
+                          </td>
+
+                          <td
+                            className="ko-mono"
+                            style={{ textAlign: "center", color: "#475569" }}
+                          >
+                            {Number(item.stok_karawang || 0).toLocaleString(
+                              "id-ID",
+                            )}
+                          </td>
+
+                          <td>
+                            <input
+                              type="number"
+                              min={0}
+                              placeholder=""
+                              value={rowQty[item.item] ?? ""}
+                              onChange={(e) =>
+                                setRowQty((prev) => ({
+                                  ...prev,
+                                  [item.item]: e.target.value,
+                                }))
+                              }
+                              style={{
+                                width: 78,
+                                padding: "6px 8px",
+                                border: "1px solid #cbd5e1",
+                                borderRadius: 6,
+                                fontSize: 12,
+                                fontWeight: 700,
+                                textAlign: "center",
+                              }}
+                            />
+                          </td>
+
+                          <td>
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: 6,
+                                alignItems: "center",
+                              }}
+                            >
+                              <select
+                                value={rowTripSelect[item.item] || "__new__"}
+                                onChange={(e) =>
+                                  setRowTripSelect((prev) => ({
+                                    ...prev,
+                                    [item.item]: e.target.value,
+                                  }))
+                                }
+                                style={{
+                                  padding: "6px 8px",
+                                  border: "1px solid #cbd5e1",
+                                  borderRadius: 6,
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  color: "#334155",
+                                  minWidth: 130,
+                                }}
+                              >
+                                <option value="__new__">+ Trip Baru</option>
+                                {manualTrips.map((trip) => (
+                                  <option key={trip.id} value={trip.id}>
+                                    {trip.no_trip}
+                                  </option>
+                                ))}
+                              </select>
+
+                              <button
+                                type="button"
+                                onClick={() => assignItemToTrip(item)}
+                                title="Masukkan ke trip"
+                                style={{
+                                  height: 30,
+                                  width: 30,
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  border: "1px solid #bfdbfe",
+                                  background: "#eff6ff",
+                                  color: "#1d4ed8",
+                                  borderRadius: 6,
+                                  cursor: "pointer",
+                                  flexShrink: 0,
+                                }}
+                              >
+                                <ArrowRight size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* ================= MANUAL TRIP BUILDER ================= */}
       <div
@@ -1723,8 +1642,7 @@ export default function TransferPlanPage() {
             <button
               type="button"
               onClick={handleRencanaTransfer}
-              disabled={buildingRencanaTransfer}
-              title="Auto-generate trip dari sisa qty Preview Item Request & Stok, sesuai kapasitas truk"
+              title="Lihat Preview Item Request & Stok"
               style={{
                 height: 34,
                 display: "flex",
@@ -1734,18 +1652,13 @@ export default function TransferPlanPage() {
                 border: "1px solid #bbf7d0",
                 background: "#f0fdf4",
                 borderRadius: 8,
-                cursor: buildingRencanaTransfer ? "not-allowed" : "pointer",
+                cursor: "pointer",
                 fontSize: 12,
                 fontWeight: 700,
                 color: "#15803d",
-                opacity: buildingRencanaTransfer ? 0.6 : 1,
               }}
             >
-              {buildingRencanaTransfer ? (
-                <Loader2 size={14} className="ko-spin" />
-              ) : (
-                <Wand2 size={14} />
-              )}
+              <Wand2 size={14} />
               Rencana Transfer
             </button>
 
