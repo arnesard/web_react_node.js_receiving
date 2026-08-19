@@ -226,6 +226,10 @@ export const karawangStyles = `
   .ko-data-table th { background: #f8fafc; color: #475569; text-align: left; font-size: 11px;
     text-transform: uppercase; letter-spacing: 0.04em; padding: 11px 12px; border-bottom: 1px solid #e2e8f0;
     white-space: nowrap; }
+  /* Tabel Preview Item Request & Stok — header freeze pas discroll */
+  .ko-preview-scroll { max-height: 480px; overflow-y: auto; }
+  .ko-preview-scroll thead th { position: sticky; top: 0; z-index: 2;
+    box-shadow: 0 1px 0 #e2e8f0; }
   .ko-data-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; color: #334155;
     vertical-align: top; }
   .ko-data-table tr:last-child td { border-bottom: none; }

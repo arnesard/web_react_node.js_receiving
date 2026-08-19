@@ -23,6 +23,8 @@ import {
   Trash2,
   RefreshCw,
   ArrowRight,
+  Printer,
+  Wand2,
 } from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
@@ -45,6 +47,12 @@ export default function TransferPlanPage() {
   // ============ MANUAL TRIP BUILDER ============
   // manualTrips: [{ id, no_trip, items: [{item, deskripsi, qty, volume, total_volume}] }]
   const [manualTrips, setManualTrips] = useState([]);
+  // Loading state khusus tombol "Rencana Transfer" (auto-generate trip).
+  const [loadingRencanaTransfer, setLoadingRencanaTransfer] = useState(false);
+  // Kapasitas 1 truk (m³) — dipakai buat ngecek trip udah "muat" apa belum.
+  // Default 52 m³, samain sama default kapasitas di buildTireTrips backend.
+  const [truckCapacity, setTruckCapacity] = useState(52);
+  const [buildingRencanaTransfer, setBuildingRencanaTransfer] = useState(false);
   // Input qty & pilihan trip tujuan per baris item di tabel preview.
   const [rowQty, setRowQty] = useState({});
   const [rowTripSelect, setRowTripSelect] = useState({});
@@ -227,6 +235,199 @@ export default function TransferPlanPage() {
     };
   }, [manualTrips]);
 
+  // Cek apakah volume 1 trip masih muat di 1 truk berdasarkan truckCapacity.
+  const getTripCapacityStatus = (volume) => {
+    const cap = Number(truckCapacity) || 0;
+    const pct = cap > 0 ? (volume / cap) * 100 : 0;
+    const selisih = Math.abs(cap - volume).toLocaleString("id-ID", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+    return {
+      pct: Number(pct.toFixed(1)),
+      over: volume > cap,
+      label: volume > cap ? `Over ${selisih} m³` : `Sisa ${selisih} m³`,
+    };
+  };
+
+  // Total truk yang dibutuhkan kalau semua trip manual digabung ke truk
+  // sebesar truckCapacity (buat ringkasan atas).
+  const trucksNeeded =
+    truckCapacity > 0
+      ? Math.ceil(manualTripTotals.totalVolume / truckCapacity)
+      : 0;
+
+  // "Rencana Transfer" — auto-generate trip baru dari SISA qty di tabel
+  // Preview Item Request & Stok (yang belum dimasukkan ke trip manapun),
+  // disusun (bin-packing) supaya tiap trip gak lewat truckCapacity.
+  // Trip manual yang udah ada gak diapa-apain, ini cuma nambah trip baru.
+  const handleRencanaTransfer = async () => {
+    if (!previewItems.length) {
+      Swal.fire(
+        "Belum Ada Data",
+        "Belum ada Preview Item Request & Stok buat direncanakan.",
+        "warning",
+      );
+      return;
+    }
+
+    const capacity = Number(truckCapacity) || 0;
+    if (capacity <= 0) {
+      Swal.fire(
+        "Kapasitas Truk Belum Diisi",
+        "Isi dulu Kapasitas Truk (m³) di atas sebelum bikin rencana transfer.",
+        "warning",
+      );
+      return;
+    }
+
+    // Sisa qty = qty request dikurangi yang udah kepasang di trip manapun
+    // (sama persis kolom "Sisa" di tabel Preview Item Request & Stok).
+    const sisaItems = previewItems
+      .map((item) => {
+        const allocated = Number(allocatedQtyMap[item.item] || 0);
+        const sisa = Number(item.qty || 0) - allocated;
+        return { ...item, qty: sisa };
+      })
+      .filter((item) => item.qty > 0);
+
+    if (!sisaItems.length) {
+      Swal.fire(
+        "Semua Item Sudah Masuk Trip",
+        "Sisa qty semua item di Preview Item Request & Stok sudah 0.",
+        "info",
+      );
+      return;
+    }
+
+    const confirm = await Swal.fire({
+      title: "Rencana Transfer Otomatis?",
+      html: `Sistem bakal bikin trip baru otomatis dari <strong>${sisaItems.length}</strong> item (sisa qty di Preview Item Request &amp; Stok), disusun sesuai kapasitas truk <strong>${capacity} m³</strong>. Trip manual yang sudah ada gak akan diubah.`,
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonText: "Ya, Rencanakan",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#2563eb",
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    setBuildingRencanaTransfer(true);
+
+    try {
+      // Bin-packing best-fit, sama logikanya kayak buildTireTrips di backend.
+      const generatedTrips = [];
+
+      sisaItems.forEach((item) => {
+        let qtyRemaining = Number(item.qty || 0);
+        const volumePerQty = Number(item.volume || 0);
+        const beratPerQty = Number(item.berat || 0);
+
+        if (qtyRemaining <= 0) return;
+
+        const pushItem = (trip, qtyToPut) => {
+          const volume = Number((qtyToPut * volumePerQty).toFixed(3));
+          const berat = Number((qtyToPut * beratPerQty).toFixed(2));
+          const idx = trip.items.findIndex((i) => i.item === item.item);
+
+          if (idx >= 0) {
+            trip.items[idx].qty += qtyToPut;
+            trip.items[idx].total_volume = Number(
+              (trip.items[idx].total_volume + volume).toFixed(3),
+            );
+            trip.items[idx].total_berat = Number(
+              (trip.items[idx].total_berat + berat).toFixed(2),
+            );
+          } else {
+            trip.items.push({
+              item: item.item,
+              deskripsi: item.deskripsi,
+              qty: qtyToPut,
+              volume: volumePerQty,
+              total_volume: volume,
+              berat: beratPerQty,
+              total_berat: berat,
+            });
+          }
+
+          trip.total_volume += volume;
+        };
+
+        // Item tanpa data volume → taro aja di trip terakhir apa adanya.
+        if (volumePerQty <= 0) {
+          let trip = generatedTrips[generatedTrips.length - 1];
+          if (!trip) {
+            trip = { total_volume: 0, items: [] };
+            generatedTrips.push(trip);
+          }
+          pushItem(trip, qtyRemaining);
+          return;
+        }
+
+        while (qtyRemaining > 0) {
+          let targetTrip = null;
+          let bestRemaining = Infinity;
+
+          generatedTrips.forEach((trip) => {
+            const remainingCapacity = capacity - trip.total_volume;
+            if (
+              remainingCapacity >= volumePerQty &&
+              remainingCapacity < bestRemaining
+            ) {
+              targetTrip = trip;
+              bestRemaining = remainingCapacity;
+            }
+          });
+
+          if (!targetTrip) {
+            targetTrip = { total_volume: 0, items: [] };
+            generatedTrips.push(targetTrip);
+          }
+
+          const availableVolume = capacity - targetTrip.total_volume;
+          const maxQty = Math.floor(
+            (availableVolume + Number.EPSILON) / volumePerQty,
+          );
+          let qtyToPut = Math.min(qtyRemaining, maxQty);
+
+          // Kalau 1 pcs item ini aja udah lebih besar dari kapasitas truk,
+          // tetap masukkan 1 pcs (over kapasitas) biar gak infinite loop.
+          if (qtyToPut <= 0) {
+            if (targetTrip.items.length === 0) {
+              qtyToPut = 1;
+            } else {
+              targetTrip = { total_volume: 0, items: [] };
+              generatedTrips.push(targetTrip);
+              continue;
+            }
+          }
+
+          pushItem(targetTrip, qtyToPut);
+          qtyRemaining -= qtyToPut;
+        }
+      });
+
+      setManualTrips((prev) => {
+        const startSeq = prev.length + 1;
+        const newTrips = generatedTrips.map((t, idx) => ({
+          id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${idx}`,
+          no_trip: generateManualDoNumber(startSeq + idx),
+          items: t.items,
+        }));
+        return [...prev, ...newTrips];
+      });
+
+      Swal.fire(
+        "Rencana Transfer Dibuat",
+        `${generatedTrips.length} trip baru otomatis dibuat dari ${sisaItems.length} item.`,
+        "success",
+      );
+    } finally {
+      setBuildingRencanaTransfer(false);
+    }
+  };
+
   const generateManualDoNumber = (sequence) => {
     const now = new Date();
     const dd = String(now.getDate()).padStart(2, "0");
@@ -302,6 +503,7 @@ export default function TransferPlanPage() {
 
     const selectedTripId = rowTripSelect[previewItem.item] || "__new__";
     const volume = Number(previewItem.volume || 0);
+    const berat = Number(previewItem.berat || 0);
 
     setManualTrips((prev) => {
       let trips = prev;
@@ -333,6 +535,7 @@ export default function TransferPlanPage() {
             ...items[idx],
             qty: mergedQty,
             total_volume: Number((mergedQty * volume).toFixed(3)),
+            total_berat: Number((mergedQty * berat).toFixed(2)),
           };
 
           return { ...t, items };
@@ -348,6 +551,8 @@ export default function TransferPlanPage() {
               qty,
               volume,
               total_volume: Number((qty * volume).toFixed(3)),
+              berat,
+              total_berat: Number((qty * berat).toFixed(2)),
             },
           ],
         };
@@ -423,6 +628,282 @@ export default function TransferPlanPage() {
     );
   };
 
+  // ===== CETAK RMB (Rencana Muat Barang) — format ngikutin template
+  // "Armas - Rencana Muat Barang" (sheet FORM), 1 file per trip. =====
+  const RMB_BORDER = {
+    top: { style: "thin", color: { rgb: "000000" } },
+    bottom: { style: "thin", color: { rgb: "000000" } },
+    left: { style: "thin", color: { rgb: "000000" } },
+    right: { style: "thin", color: { rgb: "000000" } },
+  };
+
+  const buildRmbWorksheet = (trip, header) => {
+    const items = trip.items || [];
+    const ws = {};
+
+    const put = (addr, value, style) => {
+      ws[addr] = {
+        v: value,
+        t: typeof value === "number" ? "n" : "s",
+        s: style,
+      };
+    };
+
+    const labelStyle = { font: { bold: true, sz: 10 } };
+    const valueStyle = { font: { sz: 10 } };
+    const titleStyle = {
+      font: { bold: true, sz: 16 },
+      alignment: { horizontal: "center", vertical: "center" },
+    };
+    const theadStyle = {
+      font: { bold: true, sz: 9, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: "374151" } },
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: RMB_BORDER,
+    };
+    const cellStyle = {
+      font: { sz: 9 },
+      alignment: { vertical: "center" },
+      border: RMB_BORDER,
+    };
+    const cellCenter = {
+      ...cellStyle,
+      alignment: { horizontal: "center", vertical: "center" },
+    };
+    const cellRight = {
+      ...cellStyle,
+      alignment: { horizontal: "right", vertical: "center" },
+    };
+
+    const today = new Date().toLocaleDateString("id-ID");
+
+    // ---- Header perusahaan ----
+    put("B2", "PT. GAJAH TUNGGAL TBK", { font: { bold: true, sz: 12 } });
+    put("B3", "TANGERANG", valueStyle);
+    put("M2", "DATE", labelStyle);
+    put("P2", ":", labelStyle);
+    put("R2", today, valueStyle);
+    put("M3", "PAGE", labelStyle);
+    put("P3", ":", labelStyle);
+    put("R3", "1 / 1", valueStyle);
+
+    // ---- Judul ----
+    put("F6", "RENCANA MUAT BARANG", titleStyle);
+
+    // ---- Info trip ----
+    put("B9", "NO SO", labelStyle);
+    put("D9", ":", labelStyle);
+    put("E9", header.no_so || "", valueStyle);
+
+    put("B10", "CUSTOMER", labelStyle);
+    put("D10", ":", labelStyle);
+    put("E10", header.customer || "GT DC Karawang", valueStyle);
+    put("K10", "PA/EMKL", labelStyle);
+    put("M10", ":", labelStyle);
+    put("N10", header.pa_emkl || "", valueStyle);
+
+    put("B11", "KOTA", labelStyle);
+    put("D11", ":", labelStyle);
+    put("E11", header.kota || "Jawa Barat", valueStyle);
+    put("K11", "JEN. KEND", labelStyle);
+    put("M11", ":", labelStyle);
+    put("N11", header.jen_kend || "", valueStyle);
+
+    put("B12", "NO KIRIM", labelStyle);
+    put("D12", ":", labelStyle);
+    put("E12", trip.no_trip || "", valueStyle);
+    put("K12", "NO POLISI", labelStyle);
+    put("M12", ":", labelStyle);
+    put("N12", header.no_polisi || "", valueStyle);
+
+    put("B13", "TGL KIRIM", labelStyle);
+    put("D13", ":", labelStyle);
+    put("E13", today, valueStyle);
+    put("K13", "NO CONT", labelStyle);
+    put("M13", ":", labelStyle);
+    put("N13", header.no_cont || "", valueStyle);
+
+    put("B14", "NAMA TRIP", labelStyle);
+    put("D14", ":", labelStyle);
+    put("E14", header.nama_trip || trip.no_trip || "", valueStyle);
+    put("K14", "LPN", labelStyle);
+    put("M14", ":", labelStyle);
+    put("N14", header.lpn || "", valueStyle);
+
+    // ---- Header tabel ----
+    [
+      ["B16", "NO."],
+      ["C16", "KODE ITEM"],
+      ["F16", "DESKRIPSI"],
+      ["H16", "KIRIM"],
+      ["J16", "EXTRA"],
+      ["K16", "S.INV"],
+      ["L16", "STOK"],
+      ["M16", "AKTUAL"],
+      ["Q16", "UOM"],
+      ["R16", "M3"],
+      ["S16", "KG"],
+      ["T16", "SHIPP.INS."],
+      ["V16", "PACK.INS."],
+      ["W16", "NO SO."],
+    ].forEach(([addr, val]) => put(addr, val, theadStyle));
+
+    // ---- Baris item ----
+    let row = 17;
+    let totalQty = 0;
+    let totalM3 = 0;
+    let totalKg = 0;
+
+    items.forEach((item, idx) => {
+      const qty = Number(item.qty || 0);
+      const volume = Number(
+        item.total_volume ?? qty * Number(item.volume || 0),
+      );
+      const berat = Number(item.total_berat ?? qty * Number(item.berat || 0));
+
+      totalQty += qty;
+      totalM3 += volume;
+      totalKg += berat;
+
+      put(`B${row}`, idx + 1, cellCenter);
+      put(`C${row}`, item.item || "", cellStyle);
+      put(`F${row}`, item.deskripsi || "", cellStyle);
+      put(`H${row}`, qty, cellRight);
+      put(`J${row}`, "", cellCenter);
+      put(`K${row}`, "BPW1", cellCenter);
+      put(`L${row}`, "", cellCenter);
+      put(`M${row}`, "", cellCenter);
+      put(`Q${row}`, "PCS", cellCenter);
+      put(`R${row}`, Number(volume.toFixed(3)), cellRight);
+      put(`S${row}`, Number(berat.toFixed(2)), cellRight);
+      put(`T${row}`, "", cellStyle);
+      put(`V${row}`, "", cellStyle);
+      put(`W${row}`, header.no_so || "", cellCenter);
+
+      row += 1;
+    });
+
+    // ---- Total ----
+    const totalRow = row + 1;
+    put(`F${totalRow}`, "TOTAL PCS", labelStyle);
+    put(`G${totalRow}`, ":", labelStyle);
+    put(`H${totalRow}`, totalQty, {
+      ...valueStyle,
+      alignment: { horizontal: "right" },
+    });
+    put(`K${totalRow}`, "TOTAL M3", labelStyle);
+    put(`M${totalRow}`, ":", labelStyle);
+    put(`Q${totalRow}`, Number(totalM3.toFixed(3)), {
+      ...valueStyle,
+      alignment: { horizontal: "right" },
+    });
+    put(`U${totalRow}`, "TOTAL KG :", labelStyle);
+    put(`V${totalRow}`, Number(totalKg.toFixed(2)), {
+      ...valueStyle,
+      alignment: { horizontal: "right" },
+    });
+
+    // ---- Tanda tangan ----
+    const signRow = totalRow + 3;
+    put(`G${signRow}`, "MENGETAHUI,", labelStyle);
+    put(`Q${signRow}`, "MENYERAHKAN,", labelStyle);
+    put(`U${signRow}`, "MENERIMA,", labelStyle);
+
+    const signNameRow = signRow + 6;
+    put(`H${signNameRow}`, "(   SH PERENCANAAN   )", valueStyle);
+    put(`Q${signNameRow}`, "(                          )", valueStyle);
+    put(`U${signNameRow}`, "(                          )", valueStyle);
+
+    ws["!ref"] = `A1:W${signNameRow + 2}`;
+    ws["!cols"] = [
+      { wch: 3 },
+      { wch: 6 },
+      { wch: 13 },
+      { wch: 3 },
+      { wch: 10 },
+      { wch: 22 },
+      { wch: 6 },
+      { wch: 8 },
+      { wch: 3 },
+      { wch: 7 },
+      { wch: 7 },
+      { wch: 7 },
+      { wch: 9 },
+      { wch: 3 },
+      { wch: 3 },
+      { wch: 3 },
+      { wch: 6 },
+      { wch: 9 },
+      { wch: 9 },
+      { wch: 15 },
+      { wch: 3 },
+      { wch: 13 },
+      { wch: 10 },
+    ];
+    ws["!merges"] = [XLSX.utils.decode_range("F6:N6")];
+
+    return ws;
+  };
+
+  // Buka form isian data pengiriman (No SO, PA/EMKL, No Polisi, dst — data
+  // ini gak disimpan di sistem, jadi diisi manual tiap kali mau cetak),
+  // lalu generate & download file RMB untuk 1 trip.
+  const handlePrintRmb = async (trip) => {
+    if (!trip.items.length) {
+      Swal.fire(
+        "Belum Ada Item",
+        "Trip ini belum ada item, gak bisa dicetak RMB-nya.",
+        "warning",
+      );
+      return;
+    }
+
+    const { value: header } = await Swal.fire({
+      title: `Cetak RMB — ${trip.no_trip}`,
+      html: `
+        <div style="text-align:left;font-size:13px;display:flex;flex-direction:column;gap:6px;">
+          <label>No SO<input id="rmb-no-so" class="swal2-input" style="margin:2px 0;height:36px;"></label>
+          <label>Customer<input id="rmb-customer" class="swal2-input" style="margin:2px 0;height:36px;" value="GT DC Karawang"></label>
+          <label>Kota<input id="rmb-kota" class="swal2-input" style="margin:2px 0;height:36px;" value="Jawa Barat"></label>
+          <label>Nama Trip<input id="rmb-nama-trip" class="swal2-input" style="margin:2px 0;height:36px;"></label>
+          <label>PA / EMKL<input id="rmb-pa-emkl" class="swal2-input" style="margin:2px 0;height:36px;"></label>
+          <label>Jenis Kendaraan<input id="rmb-jen-kend" class="swal2-input" style="margin:2px 0;height:36px;"></label>
+          <label>No Polisi<input id="rmb-no-polisi" class="swal2-input" style="margin:2px 0;height:36px;"></label>
+          <label>No Container<input id="rmb-no-cont" class="swal2-input" style="margin:2px 0;height:36px;"></label>
+          <label>LPN<input id="rmb-lpn" class="swal2-input" style="margin:2px 0;height:36px;"></label>
+        </div>
+      `,
+      focusConfirm: false,
+      showCancelButton: true,
+      confirmButtonText: "Cetak RMB",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#2563eb",
+      preConfirm: () => ({
+        no_so: document.getElementById("rmb-no-so").value.trim(),
+        customer: document.getElementById("rmb-customer").value.trim(),
+        kota: document.getElementById("rmb-kota").value.trim(),
+        nama_trip: document.getElementById("rmb-nama-trip").value.trim(),
+        pa_emkl: document.getElementById("rmb-pa-emkl").value.trim(),
+        jen_kend: document.getElementById("rmb-jen-kend").value.trim(),
+        no_polisi: document.getElementById("rmb-no-polisi").value.trim(),
+        no_cont: document.getElementById("rmb-no-cont").value.trim(),
+        lpn: document.getElementById("rmb-lpn").value.trim(),
+      }),
+    });
+
+    if (!header) return;
+
+    const wb = XLSX.utils.book_new();
+    const ws = buildRmbWorksheet(trip, header);
+    XLSX.utils.book_append_sheet(wb, ws, "RMB");
+    XLSX.writeFile(
+      wb,
+      `RMB_${(trip.no_trip || "TRIP").replace(/[^a-zA-Z0-9-]/g, "")}_${new Date()
+        .toISOString()
+        .slice(0, 10)}.xlsx`,
+    );
+  };
+
   const handleExportManualTripPlan = () => {
     exportTripsToExcel(
       manualTrips
@@ -462,8 +943,7 @@ export default function TransferPlanPage() {
         icon: "success",
         title: "Trip Plan Tersimpan",
         text:
-          res.data?.data?.message ||
-          "Trip Plan berhasil disimpan ke histori.",
+          res.data?.data?.message || "Trip Plan berhasil disimpan ke histori.",
         timer: 2200,
         showConfirmButton: false,
       });
@@ -932,13 +1412,20 @@ export default function TransferPlanPage() {
           }}
         >
           <div>
-            <h2 style={{ fontSize: 15, fontWeight: 800, color: "#0f172a", margin: 0 }}>
+            <h2
+              style={{
+                fontSize: 15,
+                fontWeight: 800,
+                color: "#0f172a",
+                margin: 0,
+              }}
+            >
               Preview Item Request &amp; Stok
             </h2>
             <p style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 4 }}>
-              Item TIRE dari Item Request hari ini, lengkap stok Tangerang (Control
-              Stock) &amp; stok Karawang (Control FIFO). Pilih No Trip &amp; qty
-              manual per item di bawah.
+              Item TIRE dari Item Request hari ini, lengkap stok Tangerang
+              (Control Stock) &amp; stok Karawang (Control FIFO). Pilih No Trip
+              &amp; qty manual per item di bawah.
             </p>
           </div>
 
@@ -1003,7 +1490,7 @@ export default function TransferPlanPage() {
         )}
 
         {previewItems.length > 0 && (
-          <div style={{ overflowX: "auto" }}>
+          <div className="ko-preview-scroll" style={{ overflowX: "auto" }}>
             <table className="ko-data-table" style={{ margin: 0 }}>
               <thead>
                 <tr>
@@ -1107,7 +1594,13 @@ export default function TransferPlanPage() {
                       </td>
 
                       <td>
-                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 6,
+                            alignItems: "center",
+                          }}
+                        >
                           <select
                             value={rowTripSelect[item.item] || "__new__"}
                             onChange={(e) =>
@@ -1183,11 +1676,79 @@ export default function TransferPlanPage() {
             flexWrap: "wrap",
           }}
         >
-          <h2 style={{ fontSize: 15, fontWeight: 800, color: "#0f172a", margin: 0 }}>
-            Trip Manual
-          </h2>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <h2
+              style={{
+                fontSize: 15,
+                fontWeight: 800,
+                color: "#0f172a",
+                margin: 0,
+              }}
+            >
+              Trip Manual
+            </h2>
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 11,
+                color: "#64748b",
+                fontWeight: 600,
+              }}
+            >
+              Kapasitas Truk
+              <input
+                type="number"
+                min={0}
+                step={0.1}
+                value={truckCapacity}
+                onChange={(e) => setTruckCapacity(Number(e.target.value) || 0)}
+                style={{
+                  width: 64,
+                  height: 26,
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 6,
+                  padding: "0 6px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}
+              />
+              m³
+            </label>
+          </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={handleRencanaTransfer}
+              disabled={buildingRencanaTransfer}
+              title="Auto-generate trip dari sisa qty Preview Item Request & Stok, sesuai kapasitas truk"
+              style={{
+                height: 34,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "0 14px",
+                border: "1px solid #bbf7d0",
+                background: "#f0fdf4",
+                borderRadius: 8,
+                cursor: buildingRencanaTransfer ? "not-allowed" : "pointer",
+                fontSize: 12,
+                fontWeight: 700,
+                color: "#15803d",
+                opacity: buildingRencanaTransfer ? 0.6 : 1,
+              }}
+            >
+              {buildingRencanaTransfer ? (
+                <Loader2 size={14} className="ko-spin" />
+              ) : (
+                <Wand2 size={14} />
+              )}
+              Rencana Transfer
+            </button>
+
             <button
               type="button"
               onClick={addManualTrip}
@@ -1292,7 +1853,7 @@ export default function TransferPlanPage() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+              gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
               gap: 10,
               marginBottom: 18,
             }}
@@ -1308,6 +1869,7 @@ export default function TransferPlanPage() {
                   maximumFractionDigits: 2,
                 })} m³`,
               ],
+              ["Truk Dibutuhkan", `${trucksNeeded} truk`],
             ].map(([label, value]) => (
               <div
                 key={label}
@@ -1353,8 +1915,8 @@ export default function TransferPlanPage() {
               fontSize: 13,
             }}
           >
-            Belum ada trip. Klik <strong>Tambah Trip Baru</strong>, atau langsung
-            pilih trip dari tabel preview di atas.
+            Belum ada trip. Klik <strong>Tambah Trip Baru</strong>, atau
+            langsung pilih trip dari tabel preview di atas.
           </div>
         )}
 
@@ -1390,7 +1952,9 @@ export default function TransferPlanPage() {
                     flexWrap: "wrap",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 10 }}
+                  >
                     <input
                       type="text"
                       value={trip.no_trip}
@@ -1413,41 +1977,113 @@ export default function TransferPlanPage() {
                     </span>
                   </div>
 
-                  <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                    <div
-                      style={{
-                        fontSize: 15,
-                        fontWeight: 800,
-                        color: "#16a34a",
-                      }}
-                    >
-                      {tripVolume.toLocaleString("id-ID", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}{" "}
-                      m³
-                    </div>
+                  {(() => {
+                    const capStatus = getTripCapacityStatus(tripVolume);
+                    const badgeColor = capStatus.over ? "#dc2626" : "#16a34a";
 
-                    <button
-                      type="button"
-                      onClick={() => removeManualTrip(trip.id)}
-                      title="Hapus trip"
-                      style={{
-                        height: 30,
-                        width: 30,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        border: "1px solid #fecaca",
-                        background: "#fff",
-                        color: "#dc2626",
-                        borderRadius: 6,
-                        cursor: "pointer",
-                      }}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
+                    return (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 14,
+                        }}
+                      >
+                        <div style={{ textAlign: "right" }}>
+                          <div
+                            style={{
+                              fontSize: 15,
+                              fontWeight: 800,
+                              color: badgeColor,
+                            }}
+                          >
+                            {tripVolume.toLocaleString("id-ID", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}{" "}
+                            / {truckCapacity} m³
+                          </div>
+
+                          <div
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              color: badgeColor,
+                              marginTop: 1,
+                            }}
+                          >
+                            {capStatus.over
+                              ? "TIDAK MUAT 1 TRUK — "
+                              : "MUAT — "}
+                            {capStatus.pct}% ({capStatus.label})
+                          </div>
+
+                          <div
+                            style={{
+                              marginTop: 4,
+                              width: 130,
+                              height: 5,
+                              borderRadius: 3,
+                              background: "#e2e8f0",
+                              overflow: "hidden",
+                              marginLeft: "auto",
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: `${Math.min(capStatus.pct, 100)}%`,
+                                height: "100%",
+                                background: badgeColor,
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handlePrintRmb(trip)}
+                          title="Cetak RMB"
+                          style={{
+                            height: 30,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 5,
+                            padding: "0 10px",
+                            border: "1px solid #bfdbfe",
+                            background: "#eff6ff",
+                            color: "#1d4ed8",
+                            borderRadius: 6,
+                            cursor: "pointer",
+                            fontSize: 11,
+                            fontWeight: 700,
+                          }}
+                        >
+                          <Printer size={13} />
+                          Cetak RMB
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => removeManualTrip(trip.id)}
+                          title="Hapus trip"
+                          style={{
+                            height: 30,
+                            width: 30,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            border: "1px solid #fecaca",
+                            background: "#fff",
+                            color: "#dc2626",
+                            borderRadius: 6,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* ITEMS */}
@@ -1459,8 +2095,8 @@ export default function TransferPlanPage() {
                       fontSize: 12,
                     }}
                   >
-                    Belum ada item di trip ini. Pilih trip ini dari tabel preview
-                    di atas.
+                    Belum ada item di trip ini. Pilih trip ini dari tabel
+                    preview di atas.
                   </div>
                 ) : (
                   <div style={{ padding: 12 }}>
@@ -1491,14 +2127,20 @@ export default function TransferPlanPage() {
                               <td>
                                 {Number(item.volume || 0).toLocaleString(
                                   "id-ID",
-                                  { minimumFractionDigits: 3, maximumFractionDigits: 3 },
+                                  {
+                                    minimumFractionDigits: 3,
+                                    maximumFractionDigits: 3,
+                                  },
                                 )}{" "}
                                 m³
                               </td>
                               <td style={{ fontWeight: 700 }}>
                                 {Number(item.total_volume || 0).toLocaleString(
                                   "id-ID",
-                                  { minimumFractionDigits: 2, maximumFractionDigits: 2 },
+                                  {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  },
                                 )}{" "}
                                 m³
                               </td>
@@ -1979,7 +2621,9 @@ export default function TransferPlanPage() {
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <History size={18} style={{ color: "#2563eb" }} />
-                <span style={{ fontSize: 15, fontWeight: 800, color: "#0f172a" }}>
+                <span
+                  style={{ fontSize: 15, fontWeight: 800, color: "#0f172a" }}
+                >
                   Riwayat Trip Plan
                 </span>
               </div>
@@ -2116,18 +2760,20 @@ export default function TransferPlanPage() {
                 </div>
               )}
 
-              {!loadingHistory && historySearched && historyData.length === 0 && (
-                <div
-                  style={{
-                    textAlign: "center",
-                    padding: "40px 0",
-                    color: "#94a3b8",
-                    fontSize: 13,
-                  }}
-                >
-                  Tidak ada Trip Plan yang tersimpan pada rentang tanggal ini.
-                </div>
-              )}
+              {!loadingHistory &&
+                historySearched &&
+                historyData.length === 0 && (
+                  <div
+                    style={{
+                      textAlign: "center",
+                      padding: "40px 0",
+                      color: "#94a3b8",
+                      fontSize: 13,
+                    }}
+                  >
+                    Tidak ada Trip Plan yang tersimpan pada rentang tanggal ini.
+                  </div>
+                )}
 
               {!loadingHistory && historyData.length > 0 && (
                 <div
@@ -2168,7 +2814,9 @@ export default function TransferPlanPage() {
                           }}
                         >
                           <div>
-                            <strong style={{ fontSize: 13.5, color: "#0f172a" }}>
+                            <strong
+                              style={{ fontSize: 13.5, color: "#0f172a" }}
+                            >
                               {trip.no_trip}
                             </strong>
                             <div
@@ -2223,25 +2871,28 @@ export default function TransferPlanPage() {
                             >
                               <thead>
                                 <tr>
-                                  {["Item", "Deskripsi", "Qty", "Volume (m³)"].map(
-                                    (h) => (
-                                      <th
-                                        key={h}
-                                        style={{
-                                          textAlign:
-                                            h === "Item" || h === "Deskripsi"
-                                              ? "left"
-                                              : "right",
-                                          padding: "6px 8px",
-                                          color: "#64748b",
-                                          fontWeight: 700,
-                                          borderBottom: "1px solid #e2e8f0",
-                                        }}
-                                      >
-                                        {h}
-                                      </th>
-                                    ),
-                                  )}
+                                  {[
+                                    "Item",
+                                    "Deskripsi",
+                                    "Qty",
+                                    "Volume (m³)",
+                                  ].map((h) => (
+                                    <th
+                                      key={h}
+                                      style={{
+                                        textAlign:
+                                          h === "Item" || h === "Deskripsi"
+                                            ? "left"
+                                            : "right",
+                                        padding: "6px 8px",
+                                        color: "#64748b",
+                                        fontWeight: 700,
+                                        borderBottom: "1px solid #e2e8f0",
+                                      }}
+                                    >
+                                      {h}
+                                    </th>
+                                  ))}
                                 </tr>
                               </thead>
                               <tbody>

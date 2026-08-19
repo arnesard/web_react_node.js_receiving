@@ -158,8 +158,12 @@ class KarawangItemReqModel {
     if (tireMap.size === 0) return [];
 
     const itemCodes = Array.from(tireMap.keys());
+    // NOTE: kolom berat di bawah ini diasumsikan namanya "berat" di tabel
+    // stok_opname_karawang_master_item (sumbernya sama kayak sheet "DATA
+    // BERAT & VOLUME" — kolom Berat(Kg) & Volume(M3)). Kalau nama kolom
+    // beratnya beda (misal weight/berat_kg), tinggal ganti di SELECT ini.
     const [masterRows] = await poolUtama.query(
-      `SELECT TRIM(UPPER(code_no)) AS code_no, description, volume
+      `SELECT TRIM(UPPER(code_no)) AS code_no, description, volume, berat
        FROM stok_opname_karawang_master_item
        WHERE TRIM(UPPER(code_no)) IN (?)`,
       [itemCodes],
@@ -170,6 +174,7 @@ class KarawangItemReqModel {
       const { qty, deskripsi: fallbackDeskripsi } = tireMap.get(item);
       const master = masterMap.get(item);
       const volume = Number(master?.volume || 0);
+      const berat = Number(master?.berat || 0);
       const deskripsi = master?.description || fallbackDeskripsi || "-";
       return {
         item,
@@ -177,6 +182,8 @@ class KarawangItemReqModel {
         deskripsi,
         volume,
         total_volume: Number((qty * volume).toFixed(3)),
+        berat,
+        total_berat: Number((qty * berat).toFixed(2)),
       };
     });
 
@@ -205,8 +212,10 @@ class KarawangItemReqModel {
 
     const itemCodes = reqRows.map((r) => r.item);
 
+    // NOTE: sama seperti getTireTripItems() — ganti nama kolom "berat" di
+    // sini kalau nama aslinya di tabel master_item beda.
     const [masterRows] = await poolUtama.query(
-      `SELECT TRIM(UPPER(code_no)) AS code_no, description, volume
+      `SELECT TRIM(UPPER(code_no)) AS code_no, description, volume, berat
        FROM stok_opname_karawang_master_item
        WHERE TRIM(UPPER(code_no)) IN (?)`,
       [itemCodes],
@@ -217,6 +226,7 @@ class KarawangItemReqModel {
       const qty = Number(r.qty || 0);
       const master = masterMap.get(r.item);
       const volume = Number(master?.volume || 0);
+      const berat = Number(master?.berat || 0);
       const deskripsi = master?.description || "-";
 
       return {
@@ -225,6 +235,8 @@ class KarawangItemReqModel {
         deskripsi,
         volume,
         total_volume: Number((qty * volume).toFixed(3)),
+        berat,
+        total_berat: Number((qty * berat).toFixed(2)),
       };
     });
   }
@@ -280,6 +292,10 @@ class KarawangItemReqModel {
           request_qty: qtyRemaining,
           volume: volumePerQty,
           total_volume: 0,
+          berat: Number(item.berat || 0),
+          total_berat: Number(
+            (qtyRemaining * Number(item.berat || 0)).toFixed(2),
+          ),
         });
 
         trip.total_qty += qtyRemaining;
@@ -338,6 +354,7 @@ class KarawangItemReqModel {
         }
 
         const volume = qtyToPut * volumePerQty;
+        const beratPerQty = Number(item.berat || 0);
 
         targetTrip.items.push({
           id: item.id,
@@ -347,6 +364,8 @@ class KarawangItemReqModel {
           request_qty: qtyToPut,
           volume: volumePerQty,
           total_volume: volume,
+          berat: beratPerQty,
+          total_berat: Number((qtyToPut * beratPerQty).toFixed(2)),
         });
 
         targetTrip.total_qty += qtyToPut;
