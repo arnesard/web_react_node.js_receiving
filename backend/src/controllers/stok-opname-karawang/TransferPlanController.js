@@ -3,6 +3,7 @@
 // menggabungkan item request jenis TIRE hari ini dengan data Schedule OEM
 // dari bpw_dept_db.sch_oem (lihat KarawangItemRequestModel.getTireTripItems).
 const KarawangItemRequestModel = require("../../models/stok-opname-karawang/KarawangItemRequestModel");
+const KarawangTripPlanModel = require("../../models/stok-opname-karawang/KarawangTripPlanModel");
 
 const ExcelJS = require("exceljs");
 const response = require("../../utils/response");
@@ -142,6 +143,67 @@ class TransferPlanController {
       console.error("TransferPlanController.tireTripPlan gagal:", err);
 
       return response.error(res, "Gagal membuat Tire Trip Plan.");
+    }
+  }
+
+  // Simpan hasil Trip Plan (yang lagi ditampilkan di halaman) ke histori —
+  // 1 baris per trip (No Trip), beserta item + qty request + total volume.
+  // Dipanggil tombol "Simpan Trip Plan" di frontend, BUKAN otomatis tiap
+  // kali kapasitas di-utak-atik, biar histori gak numpuk data percobaan.
+  async saveTripPlan(req, res) {
+    try {
+      const { trips, kapasitas } = req.body || {};
+
+      if (!Array.isArray(trips) || trips.length === 0) {
+        return response.error(res, "Tidak ada data Trip Plan untuk disimpan.", 422);
+      }
+
+      const payload = trips.map((trip, idx) => ({
+        no_trip:
+          trip.do_number ||
+          KarawangItemRequestModel.generateDoNumber(trip.trip || idx + 1),
+        kapasitas: kapasitas || trip.kapasitas,
+        items: Array.isArray(trip.items)
+          ? trip.items.map((item) => ({
+              item: item.item,
+              deskripsi: item.deskripsi,
+              qty: item.qty,
+              volume: item.volume,
+              total_volume: item.total_volume,
+            }))
+          : [],
+      }));
+
+      const totalRows = await KarawangTripPlanModel.bulkCreate(payload);
+
+      return response.success(res, {
+        total: totalRows,
+        message: `Trip Plan berhasil disimpan (${trips.length} trip, ${totalRows} baris item).`,
+      });
+    } catch (err) {
+      console.error("TransferPlanController.saveTripPlan gagal:", err);
+
+      return response.error(res, err.message || "Gagal menyimpan Trip Plan.");
+    }
+  }
+
+  // Histori Trip Plan — filter tanggal (dateFrom/dateTo) buat tombol
+  // "Filter Riwayat" di halaman Transfer Plan.
+  async tripPlanHistory(req, res) {
+    try {
+      const { dateFrom, dateTo, noTrip } = req.query;
+
+      const rows = await KarawangTripPlanModel.list({
+        dateFrom,
+        dateTo,
+        noTrip,
+      });
+
+      return response.success(res, rows);
+    } catch (err) {
+      console.error("TransferPlanController.tripPlanHistory gagal:", err);
+
+      return response.error(res, "Gagal mengambil histori Trip Plan.");
     }
   }
 }

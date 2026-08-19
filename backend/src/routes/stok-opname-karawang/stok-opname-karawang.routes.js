@@ -71,4 +71,8 @@ router.post(
 router.get("/item-req/tire-trip-plan", TransferPlanController.tireTripPlan);
 
 router.get("/item-req/summary", TransferPlanController.itemRequestSummary);
+
+// Histori Trip Plan — simpan hasil trip plan + filter tanggal
+router.post("/trip-plan/save", TransferPlanController.saveTripPlan);
+router.get("/trip-plan/history", TransferPlanController.tripPlanHistory);
 module.exports = router;

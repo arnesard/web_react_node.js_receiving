@@ -15,6 +15,10 @@ import {
   Download,
   RotateCcw,
   Package,
+  Save,
+  Filter,
+  X,
+  History,
 } from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
@@ -29,8 +33,22 @@ export default function TransferPlanPage() {
   const [tripCapacity, setTripCapacity] = useState(52);
   const [tireTripPlan, setTireTripPlan] = useState(null);
   const [loadingTripPlan, setLoadingTripPlan] = useState(false);
+  const [savingTripPlan, setSavingTripPlan] = useState(false);
 
   const [summaryItemReq, setSummaryItemReq] = useState([]);
+
+  // ============ HISTORI TRIP PLAN (Filter Riwayat) ============
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historyDateFrom, setHistoryDateFrom] = useState(
+    new Date().toISOString().slice(0, 10),
+  );
+  const [historyDateTo, setHistoryDateTo] = useState(
+    new Date().toISOString().slice(0, 10),
+  );
+  const [historyData, setHistoryData] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historySearched, setHistorySearched] = useState(false);
+  const [expandedHistoryId, setExpandedHistoryId] = useState(null);
 
   const loadSummaryItemReq = async () => {
     try {
@@ -239,61 +257,140 @@ export default function TransferPlanPage() {
     });
   };
 
-  const handleExportTireTripPlan = () => {
-    if (!tireTripPlan?.trips?.length) {
-      alert("Belum ada hasil planning untuk di-export.");
+  // Export ke file Excel (.xlsx) beneran — bukan CSV lagi — biar format
+  // angka & style header rapi pas dibuka di Excel.
+  const exportTripsToExcel = (trips, filenamePrefix = "Trip_Plan") => {
+    if (!trips?.length) {
+      Swal.fire(
+        "Belum Ada Data",
+        "Belum ada hasil planning untuk di-export.",
+        "warning",
+      );
       return;
     }
 
-    const rows = [];
+    const wb = XLSX.utils.book_new();
 
-    // HEADER
-    rows.push(["Item", "Description", "Qty", "Kubikasi"]);
+    const wsData = [["No Trip", "Item", "Description", "Qty", "Kubikasi (m³)"]];
 
-    // DATA
-    tireTripPlan.trips.forEach((trip) => {
-      trip.items.forEach((item) => {
+    trips.forEach((trip) => {
+      (trip.items || []).forEach((item) => {
         const qty = Number(item.qty || 0);
         const volume = Number(item.volume || 0);
-        const kubikasi = qty * volume;
+        const kubikasi = Number(item.total_volume ?? qty * volume);
 
-        rows.push([
+        wsData.push([
+          trip.do_number || trip.no_trip || `Trip ${trip.trip || ""}`,
           item.item || "",
           item.deskripsi || "",
           qty,
-          kubikasi.toFixed(2),
+          Number(kubikasi.toFixed(2)),
         ]);
       });
     });
 
-    // Convert ke CSV
-    const csv = rows
-      .map((row) =>
-        row
-          .map((value) => {
-            const text = String(value ?? "");
-            return `"${text.replace(/"/g, '""')}"`;
-          })
-          .join(","),
-      )
-      .join("\r\n");
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
 
-    // BOM supaya Excel baca UTF-8 dengan benar
-    const blob = new Blob(["\uFEFF" + csv], {
-      type: "text/csv;charset=utf-8;",
+    ws["!cols"] = [
+      { wch: 16 },
+      { wch: 20 },
+      { wch: 35 },
+      { wch: 10 },
+      { wch: 14 },
+    ];
+
+    ["A1", "B1", "C1", "D1", "E1"].forEach((cell) => {
+      if (!ws[cell]) return;
+      ws[cell].s = {
+        font: { bold: true, color: { rgb: "FFFFFF" } },
+        fill: { fgColor: { rgb: "2563EB" } },
+        alignment: { horizontal: "center", vertical: "center" },
+        border: {
+          top: { style: "thin", color: { rgb: "D1D5DB" } },
+          bottom: { style: "thin", color: { rgb: "D1D5DB" } },
+          left: { style: "thin", color: { rgb: "D1D5DB" } },
+          right: { style: "thin", color: { rgb: "D1D5DB" } },
+        },
+      };
     });
 
-    const url = URL.createObjectURL(blob);
+    XLSX.utils.book_append_sheet(wb, ws, "Trip Plan");
 
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `Trip_Plan_${new Date().toISOString().slice(0, 10)}.csv`;
+    XLSX.writeFile(
+      wb,
+      `${filenamePrefix}_${new Date().toISOString().slice(0, 10)}.xlsx`,
+    );
+  };
 
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const handleExportTireTripPlan = () => {
+    exportTripsToExcel(tireTripPlan?.trips, "Trip_Plan");
+  };
 
-    URL.revokeObjectURL(url);
+  // Simpan hasil Trip Plan yang lagi tampil ke histori (DB) — No Trip,
+  // item, qty (request), dan total volume tiap trip.
+  const handleSaveTripPlan = async () => {
+    if (!tireTripPlan?.trips?.length) {
+      Swal.fire(
+        "Belum Ada Data",
+        "Buat Trip Plan dulu sebelum disimpan.",
+        "warning",
+      );
+      return;
+    }
+
+    if (savingTripPlan) return;
+
+    setSavingTripPlan(true);
+
+    try {
+      const res = await api.post("/stok-opname-karawang/trip-plan/save", {
+        kapasitas: tripCapacity,
+        trips: tireTripPlan.trips,
+      });
+
+      await Swal.fire({
+        icon: "success",
+        title: "Trip Plan Tersimpan",
+        text:
+          res.data?.data?.message ||
+          "Trip Plan berhasil disimpan ke histori.",
+        timer: 2200,
+        showConfirmButton: false,
+      });
+    } catch (err) {
+      Swal.fire(
+        "Gagal Menyimpan",
+        err.response?.data?.message || err.message,
+        "error",
+      );
+    } finally {
+      setSavingTripPlan(false);
+    }
+  };
+
+  // Ambil histori Trip Plan (Filter Riwayat) berdasarkan rentang tanggal.
+  const loadTripPlanHistory = async () => {
+    setLoadingHistory(true);
+    setHistorySearched(true);
+
+    try {
+      const res = await api.get("/stok-opname-karawang/trip-plan/history", {
+        params: {
+          dateFrom: historyDateFrom,
+          dateTo: historyDateTo,
+        },
+      });
+
+      setHistoryData(res.data?.data || []);
+    } catch (err) {
+      Swal.fire(
+        "Gagal Mengambil Histori",
+        err.response?.data?.message || err.message,
+        "error",
+      );
+    } finally {
+      setLoadingHistory(false);
+    }
   };
   const resetTireTripPlan = async () => {
     const result = await Swal.fire({
@@ -337,7 +434,7 @@ export default function TransferPlanPage() {
   };
 
   return (
-    <div className="ko-page ko-page-wide">
+    <div className="ko-page ko-page-full">
       <style>{karawangStyles}</style>
       <KarawangSubNav />
 
@@ -359,19 +456,44 @@ export default function TransferPlanPage() {
             </p>
           </div>
 
-          <button
-            type="button"
-            className="ko-btn-primary"
-            onClick={() => setShowUploadModal(true)}
-            style={{
-              width: "auto",
-              padding: "9px 16px",
-              flexShrink: 0,
-            }}
-          >
-            <Upload size={15} />
-            Upload Item Request
-          </button>
+          <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => {
+                setShowHistoryModal(true);
+                if (!historySearched) loadTripPlanHistory();
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                border: "1px solid #cbd5e1",
+                background: "#fff",
+                color: "#334155",
+                borderRadius: 8,
+                padding: "9px 16px",
+                cursor: "pointer",
+                fontSize: 12.5,
+                fontWeight: 700,
+              }}
+            >
+              <Filter size={15} />
+              Filter Riwayat
+            </button>
+
+            <button
+              type="button"
+              className="ko-btn-primary"
+              onClick={() => setShowUploadModal(true)}
+              style={{
+                width: "auto",
+                padding: "9px 16px",
+              }}
+            >
+              <Upload size={15} />
+              Upload Item Request
+            </button>
+          </div>
         </div>
       </div>
 
@@ -823,10 +945,41 @@ export default function TransferPlanPage() {
                 fontWeight: 700,
                 color: "#15803d",
               }}
-              title="Export hasil Trip Plan"
+              title="Export hasil Trip Plan ke Excel"
             >
               <Download size={15} />
-              Export Hasil
+              Export Excel
+            </button>
+          )}
+
+          {tireTripPlan && (
+            <button
+              type="button"
+              onClick={handleSaveTripPlan}
+              disabled={savingTripPlan}
+              style={{
+                height: 34,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "0 12px",
+                border: "1px solid #bfdbfe",
+                background: "#fff",
+                borderRadius: 8,
+                cursor: savingTripPlan ? "not-allowed" : "pointer",
+                fontSize: 12,
+                fontWeight: 700,
+                color: "#1d4ed8",
+                opacity: savingTripPlan ? 0.6 : 1,
+              }}
+              title="Simpan No Trip, item, qty request & total volume ke histori"
+            >
+              {savingTripPlan ? (
+                <Loader2 size={15} className="ko-spin" />
+              ) : (
+                <Save size={15} />
+              )}
+              {savingTripPlan ? "Menyimpan..." : "Simpan Trip Plan"}
             </button>
           )}
         </div>
@@ -1659,6 +1812,360 @@ export default function TransferPlanPage() {
 
                 {uploadingFile ? "Mengupload..." : "Upload"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: FILTER RIWAYAT TRIP PLAN ================= */}
+      {showHistoryModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: 16,
+          }}
+          onClick={() => setShowHistoryModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#fff",
+              borderRadius: 14,
+              width: "100%",
+              maxWidth: 900,
+              maxHeight: "85vh",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+              boxShadow: "0 20px 50px rgba(15,23,42,0.25)",
+            }}
+          >
+            {/* HEADER */}
+            <div
+              style={{
+                padding: "16px 20px",
+                borderBottom: "1px solid #e2e8f0",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <History size={18} style={{ color: "#2563eb" }} />
+                <span style={{ fontSize: 15, fontWeight: 800, color: "#0f172a" }}>
+                  Riwayat Trip Plan
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowHistoryModal(false)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  cursor: "pointer",
+                  color: "#64748b",
+                  padding: 4,
+                  display: "flex",
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* FILTER BAR */}
+            <div
+              style={{
+                padding: "14px 20px",
+                borderBottom: "1px solid #e2e8f0",
+                display: "flex",
+                alignItems: "flex-end",
+                gap: 10,
+                flexWrap: "wrap",
+                background: "#f8fafc",
+              }}
+            >
+              <div>
+                <label
+                  className="ko-field-label"
+                  style={{ display: "block", marginBottom: 6 }}
+                >
+                  Dari Tanggal
+                </label>
+                <input
+                  type="date"
+                  className="ko-input"
+                  value={historyDateFrom}
+                  onChange={(e) => setHistoryDateFrom(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label
+                  className="ko-field-label"
+                  style={{ display: "block", marginBottom: 6 }}
+                >
+                  Sampai Tanggal
+                </label>
+                <input
+                  type="date"
+                  className="ko-input"
+                  value={historyDateTo}
+                  onChange={(e) => setHistoryDateTo(e.target.value)}
+                />
+              </div>
+
+              <button
+                type="button"
+                className="ko-btn-primary"
+                onClick={loadTripPlanHistory}
+                disabled={loadingHistory}
+                style={{ width: "auto", padding: "9px 16px" }}
+              >
+                {loadingHistory ? (
+                  <Loader2 size={15} className="ko-spin" />
+                ) : (
+                  <Filter size={15} />
+                )}
+                Cari
+              </button>
+
+              {historyData.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    exportTripsToExcel(
+                      historyData.map((h) => ({
+                        do_number: h.no_trip,
+                        items: h.items,
+                      })),
+                      "Riwayat_Trip_Plan",
+                    )
+                  }
+                  style={{
+                    height: 34,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "0 12px",
+                    border: "1px solid #bbf7d0",
+                    background: "#fff",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: "#15803d",
+                    marginLeft: "auto",
+                  }}
+                >
+                  <Download size={15} />
+                  Export Excel
+                </button>
+              )}
+            </div>
+
+            {/* LIST */}
+            <div
+              style={{
+                padding: 20,
+                overflowY: "auto",
+                flex: 1,
+              }}
+            >
+              {loadingHistory && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: "40px 0",
+                    color: "#64748b",
+                    fontSize: 13,
+                    gap: 8,
+                  }}
+                >
+                  <Loader2 size={16} className="ko-spin" />
+                  Memuat histori...
+                </div>
+              )}
+
+              {!loadingHistory && historySearched && historyData.length === 0 && (
+                <div
+                  style={{
+                    textAlign: "center",
+                    padding: "40px 0",
+                    color: "#94a3b8",
+                    fontSize: 13,
+                  }}
+                >
+                  Tidak ada Trip Plan yang tersimpan pada rentang tanggal ini.
+                </div>
+              )}
+
+              {!loadingHistory && historyData.length > 0 && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                  }}
+                >
+                  {historyData.map((trip) => {
+                    const isExpanded = expandedHistoryId === trip.id;
+
+                    return (
+                      <div
+                        key={trip.id}
+                        style={{
+                          border: "1px solid #e2e8f0",
+                          borderRadius: 10,
+                          overflow: "hidden",
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedHistoryId(isExpanded ? null : trip.id)
+                          }
+                          style={{
+                            width: "100%",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: 12,
+                            padding: "12px 14px",
+                            background: "#f8fafc",
+                            border: "none",
+                            cursor: "pointer",
+                            textAlign: "left",
+                          }}
+                        >
+                          <div>
+                            <strong style={{ fontSize: 13.5, color: "#0f172a" }}>
+                              {trip.no_trip}
+                            </strong>
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: "#94a3b8",
+                                marginTop: 3,
+                              }}
+                            >
+                              {trip.tanggal
+                                ? String(trip.tanggal).slice(0, 10)
+                                : "-"}{" "}
+                              · {Number(trip.jumlah_item || 0)} item ·{" "}
+                              {Number(trip.total_qty || 0).toLocaleString(
+                                "id-ID",
+                              )}{" "}
+                              Qty
+                            </div>
+                          </div>
+
+                          <div style={{ textAlign: "right" }}>
+                            <div
+                              style={{
+                                fontSize: 14,
+                                fontWeight: 800,
+                                color: "#16a34a",
+                              }}
+                            >
+                              {Number(trip.total_volume || 0).toLocaleString(
+                                "id-ID",
+                                {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                },
+                              )}{" "}
+                              m³
+                            </div>
+                            <div style={{ fontSize: 10, color: "#64748b" }}>
+                              {Number(trip.utilization || 0)}% terisi
+                            </div>
+                          </div>
+                        </button>
+
+                        {isExpanded && (
+                          <div style={{ padding: "10px 14px" }}>
+                            <table
+                              style={{
+                                width: "100%",
+                                borderCollapse: "collapse",
+                                fontSize: 12,
+                              }}
+                            >
+                              <thead>
+                                <tr>
+                                  {["Item", "Deskripsi", "Qty", "Volume (m³)"].map(
+                                    (h) => (
+                                      <th
+                                        key={h}
+                                        style={{
+                                          textAlign:
+                                            h === "Item" || h === "Deskripsi"
+                                              ? "left"
+                                              : "right",
+                                          padding: "6px 8px",
+                                          color: "#64748b",
+                                          fontWeight: 700,
+                                          borderBottom: "1px solid #e2e8f0",
+                                        }}
+                                      >
+                                        {h}
+                                      </th>
+                                    ),
+                                  )}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(trip.items || []).map((item) => (
+                                  <tr key={item.id}>
+                                    <td style={{ padding: "6px 8px" }}>
+                                      {item.item}
+                                    </td>
+                                    <td style={{ padding: "6px 8px" }}>
+                                      {item.deskripsi || "-"}
+                                    </td>
+                                    <td
+                                      style={{
+                                        padding: "6px 8px",
+                                        textAlign: "right",
+                                      }}
+                                    >
+                                      {Number(item.qty || 0).toLocaleString(
+                                        "id-ID",
+                                      )}
+                                    </td>
+                                    <td
+                                      style={{
+                                        padding: "6px 8px",
+                                        textAlign: "right",
+                                      }}
+                                    >
+                                      {Number(
+                                        item.total_volume || 0,
+                                      ).toLocaleString("id-ID", {
+                                        minimumFractionDigits: 2,
+                                        maximumFractionDigits: 2,
+                                      })}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>
