@@ -22,7 +22,6 @@ import {
   Plus,
   Trash2,
   RefreshCw,
-  ArrowRight,
   Printer,
   Wand2,
 } from "lucide-react";
@@ -55,9 +54,8 @@ export default function TransferPlanPage() {
   // Kapasitas 1 truk (m³) — dipakai buat ngecek trip udah "muat" apa belum.
   // Default 52 m³, samain sama default kapasitas di buildTireTrips backend.
   const [truckCapacity, setTruckCapacity] = useState(52);
-  // Input qty & pilihan trip tujuan per baris item di tabel preview.
-  const [rowQty, setRowQty] = useState({});
-  const [rowTripSelect, setRowTripSelect] = useState({});
+  // Form "Tambah Item" per kartu trip — { [tripId]: { itemCode, qty } }.
+  const [addItemForm, setAddItemForm] = useState({});
 
   // ============ HISTORI TRIP PLAN (Filter Riwayat) ============
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -260,10 +258,268 @@ export default function TransferPlanPage() {
       ? Math.ceil(manualTripTotals.totalVolume / truckCapacity)
       : 0;
 
-  // "Rencana Transfer" — sekarang cuma buka modal yang isinya tabel
-  // Preview Item Request & Stok. Gak ada lagi auto-generate trip.
+  // "Rencana Transfer" — buka modal yang isinya tabel
+  // Preview Item Request & Stok (view only, buat ngecek stok sebelum generate).
   const handleRencanaTransfer = () => {
     setShowPreviewTable(true);
+  };
+
+  // ===== AUTO GENERATE TRIP =====
+  // Bikin trip otomatis dari Item Request TIRE hari ini, berdasarkan stok
+  // Tangerang yang tersedia:
+  // - Qty yang diambil per item = min(sisa request, stok tangerang) →
+  //   kalau stok gak cukup, diisi PARTIAL sebesar stok yang ada (sisanya
+  //   otomatis kebawa lagi kalau di-generate ulang setelah stok nambah,
+  //   atau bisa dimasukin manual lewat "Tambah Trip Baru").
+  // - Item yang sisa request-nya 0 (udah kebagi full) atau stok
+  //   tangerang-nya 0, di-skip (gak digenerate).
+  // - Pengelompokan ke trip pake algoritma BEST-FIT DECREASING: item
+  //   diurutin dari volume total (qty x vol/qty) TERBESAR dulu, terus tiap
+  //   item dicariin trip yang udah ada dengan SISA KAPASITAS PALING PAS
+  //   (paling kecil tapi masih muat) — jadi trip yang udah lumayan penuh
+  //   diprioritasin ditambahin dulu, baru buka trip baru kalau bener-bener
+  //   gak ada yang muat. Ini bikin utilisasi tiap truk jauh lebih rata &
+  //   maksimal dibanding sekadar isi berurutan sampai limit ke-4 item.
+  // - Batasan per trip tetep 2: MAX 4 ITEM & volume gak boleh lebih dari
+  //   Kapasitas Truk (m³).
+  const handleAutoGenerateTrip = () => {
+    if (!previewItems.length) {
+      Swal.fire(
+        "Belum Ada Data",
+        "Belum ada Item Request TIRE hari ini buat di-generate.",
+        "info",
+      );
+      return;
+    }
+
+    setLoadingRencanaTransfer(true);
+
+    try {
+      // Item kandidat: masih ada sisa request DAN stok tangerang > 0.
+      const candidates = previewItems
+        .map((item) => {
+          const allocated = Number(allocatedQtyMap[item.item] || 0);
+          const sisa = Number(item.qty || 0) - allocated;
+          const stokTangerang = Number(item.stok_tangerang || 0);
+          const allocQty = Math.max(0, Math.min(sisa, stokTangerang));
+          const volume = Number(item.volume || 0);
+          const lineVolume = Number((allocQty * volume).toFixed(3));
+
+          return { ...item, sisa, allocQty, volume, lineVolume };
+        })
+        .filter((item) => item.sisa > 0 && item.allocQty > 0);
+
+      if (!candidates.length) {
+        Swal.fire(
+          "Tidak Ada Item Bisa Digenerate",
+          "Semua item sudah masuk trip, atau stok Tangerang-nya kosong untuk sisa request yang ada.",
+          "info",
+        );
+        return;
+      }
+
+      // Urutin dari volume total TERBESAR dulu (Decreasing) supaya item
+      // besar dapet slot lebih dulu, item kecil belakangan buat "nambal"
+      // sisa ruang truk yang lain (Best-Fit).
+      const sortedCandidates = [...candidates].sort(
+        (a, b) => b.lineVolume - a.lineVolume,
+      );
+
+      const cap = Number(truckCapacity) || 0;
+      const trips = [];
+      let seq = manualTrips.length;
+      let partialCount = 0;
+
+      sortedCandidates.forEach((item) => {
+        const berat = Number(item.berat || 0);
+        const qty = item.allocQty;
+        const itemVolume = item.lineVolume;
+
+        if (qty < item.sisa) partialCount += 1;
+
+        // Cari trip existing yang masih muat (< 4 item & gak lewat kapasitas)
+        // dengan sisa ruang PALING KECIL (best fit) supaya truk yang udah
+        // lumayan penuh ditambalin dulu, bukan malah buka trip baru.
+        let bestTrip = null;
+        let bestLeftover = Infinity;
+
+        trips.forEach((t) => {
+          if (t.items.length >= 4) return;
+
+          const newVolume = Number((t._volume + itemVolume).toFixed(3));
+          if (cap > 0 && newVolume > cap) return;
+
+          const leftover = cap > 0 ? cap - newVolume : Infinity;
+
+          if (leftover < bestLeftover) {
+            bestLeftover = leftover;
+            bestTrip = t;
+          }
+        });
+
+        if (!bestTrip) {
+          seq += 1;
+          bestTrip = {
+            id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${seq}`,
+            no_trip: generateManualDoNumber(seq),
+            items: [],
+            _volume: 0,
+          };
+          trips.push(bestTrip);
+        }
+
+        bestTrip.items.push({
+          item: item.item,
+          deskripsi: item.deskripsi,
+          qty,
+          volume: item.volume,
+          total_volume: itemVolume,
+          berat,
+          total_berat: Number((qty * berat).toFixed(2)),
+        });
+        bestTrip._volume = Number((bestTrip._volume + itemVolume).toFixed(3));
+      });
+
+      const newTrips = trips.map(({ _volume, ...t }) => t);
+
+      setManualTrips((prev) => [...prev, ...newTrips]);
+      setShowPreviewTable(false);
+
+      const partialNote =
+        partialCount > 0
+          ? ` (${partialCount} item cuma kebagi sebagian karena stok Tangerang terbatas)`
+          : "";
+
+      Swal.fire({
+        icon: "success",
+        title: "Trip Otomatis Dibuat",
+        text: `${newTrips.length} trip berhasil dibuat dari ${candidates.length} item.${partialNote}`,
+        timer: 6000,
+        showConfirmButton: false,
+      });
+    } finally {
+      setLoadingRencanaTransfer(false);
+    }
+  };
+
+  // Ubah qty 1 baris item di dalam trip manual (bisa nambah/ngurangin),
+  // total_volume & total_berat ikut dihitung ulang otomatis.
+  const updateManualTripItemQty = (tripId, itemCode, rawQty) => {
+    setManualTrips((prev) =>
+      prev.map((t) => {
+        if (t.id !== tripId) return t;
+
+        return {
+          ...t,
+          items: t.items.map((i) => {
+            if (i.item !== itemCode) return i;
+
+            const qty = Math.max(0, Number(rawQty) || 0);
+            const volume = Number(i.volume || 0);
+            const berat = Number(i.berat || 0);
+
+            return {
+              ...i,
+              qty,
+              total_volume: Number((qty * volume).toFixed(3)),
+              total_berat: Number((qty * berat).toFixed(2)),
+            };
+          }),
+        };
+      }),
+    );
+  };
+
+  const updateAddItemForm = (tripId, field, value) => {
+    setAddItemForm((prev) => ({
+      ...prev,
+      [tripId]: { ...prev[tripId], [field]: value },
+    }));
+  };
+
+  // Tambah 1 item manual ke trip TERTENTU (dipilih dari daftar Item
+  // Request). Kalau item itu udah ada di trip yang sama, qty-nya digabung
+  // (bukan bikin baris dobel). Batas 4 item/trip tetep berlaku KECUALI
+  // item yang dipilih emang udah ada di trip itu (cuma nambah qty, gak
+  // nambah baris baru).
+  const addManualItemToTrip = (tripId) => {
+    const form = addItemForm[tripId] || {};
+    const itemCode = form.itemCode;
+    const qty = Number(form.qty);
+
+    if (!itemCode) {
+      Swal.fire(
+        "Pilih Item Dulu",
+        "Pilih item yang mau ditambahin.",
+        "warning",
+      );
+      return;
+    }
+
+    if (!qty || qty <= 0) {
+      Swal.fire("Qty Belum Diisi", "Isi qty lebih dari 0.", "warning");
+      return;
+    }
+
+    const trip = manualTrips.find((t) => t.id === tripId);
+    const alreadyInTrip = trip?.items.some((i) => i.item === itemCode);
+
+    if (trip && trip.items.length >= 4 && !alreadyInTrip) {
+      Swal.fire(
+        "Trip Udah Penuh",
+        "Maksimal 4 item per trip. Hapus salah satu item dulu atau pilih trip lain.",
+        "warning",
+      );
+      return;
+    }
+
+    const meta = previewItems.find((i) => i.item === itemCode) || {};
+    const deskripsi = meta.deskripsi || "";
+    const volume = Number(meta.volume || 0);
+    const berat = Number(meta.berat || 0);
+
+    setManualTrips((prev) =>
+      prev.map((t) => {
+        if (t.id !== tripId) return t;
+
+        const idx = t.items.findIndex((i) => i.item === itemCode);
+
+        if (idx >= 0) {
+          const mergedQty = Number(t.items[idx].qty) + qty;
+          const items = [...t.items];
+
+          items[idx] = {
+            ...items[idx],
+            qty: mergedQty,
+            total_volume: Number((mergedQty * volume).toFixed(3)),
+            total_berat: Number((mergedQty * berat).toFixed(2)),
+          };
+
+          return { ...t, items };
+        }
+
+        return {
+          ...t,
+          items: [
+            ...t.items,
+            {
+              item: itemCode,
+              deskripsi,
+              qty,
+              volume,
+              total_volume: Number((qty * volume).toFixed(3)),
+              berat,
+              total_berat: Number((qty * berat).toFixed(2)),
+            },
+          ],
+        };
+      }),
+    );
+
+    setAddItemForm((prev) => ({
+      ...prev,
+      [tripId]: { itemCode: "", qty: "" },
+    }));
   };
 
   const generateManualDoNumber = (sequence) => {
@@ -322,83 +578,6 @@ export default function TransferPlanPage() {
           : t,
       ),
     );
-  };
-
-  // Masukkan 1 baris item preview (dengan qty yang diisi user) ke trip
-  // yang dipilih di dropdown baris itu — kalau dropdown-nya "+ Trip Baru"
-  // (atau belum ada trip sama sekali), trip baru dibuat dulu on-the-fly.
-  const assignItemToTrip = (previewItem) => {
-    const qty = Number(rowQty[previewItem.item]);
-
-    if (!qty || qty <= 0) {
-      Swal.fire(
-        "Qty Belum Diisi",
-        "Isi dulu qty yang mau dimasukkan ke trip (lebih dari 0).",
-        "warning",
-      );
-      return;
-    }
-
-    const selectedTripId = rowTripSelect[previewItem.item] || "__new__";
-    const volume = Number(previewItem.volume || 0);
-    const berat = Number(previewItem.berat || 0);
-
-    setManualTrips((prev) => {
-      let trips = prev;
-      let targetId = selectedTripId;
-      const tripExists = prev.some((t) => t.id === selectedTripId);
-
-      if (selectedTripId === "__new__" || !tripExists) {
-        targetId = `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        trips = [
-          ...prev,
-          {
-            id: targetId,
-            no_trip: generateManualDoNumber(prev.length + 1),
-            items: [],
-          },
-        ];
-      }
-
-      return trips.map((t) => {
-        if (t.id !== targetId) return t;
-
-        const idx = t.items.findIndex((i) => i.item === previewItem.item);
-
-        if (idx >= 0) {
-          const mergedQty = Number(t.items[idx].qty) + qty;
-          const items = [...t.items];
-
-          items[idx] = {
-            ...items[idx],
-            qty: mergedQty,
-            total_volume: Number((mergedQty * volume).toFixed(3)),
-            total_berat: Number((mergedQty * berat).toFixed(2)),
-          };
-
-          return { ...t, items };
-        }
-
-        return {
-          ...t,
-          items: [
-            ...t.items,
-            {
-              item: previewItem.item,
-              deskripsi: previewItem.deskripsi,
-              qty,
-              volume,
-              total_volume: Number((qty * volume).toFixed(3)),
-              berat,
-              total_berat: Number((qty * berat).toFixed(2)),
-            },
-          ],
-        };
-      });
-    });
-
-    setRowQty((prev) => ({ ...prev, [previewItem.item]: "" }));
-    setRowTripSelect((prev) => ({ ...prev, [previewItem.item]: "__new__" }));
   };
 
   // Export ke file Excel (.xlsx) beneran — bukan CSV lagi — biar format
@@ -466,256 +645,171 @@ export default function TransferPlanPage() {
     );
   };
 
-  // ===== CETAK RMB (Rencana Muat Barang) — format ngikutin template
-  // "Armas - Rencana Muat Barang" (sheet FORM), 1 file per trip. =====
-  const RMB_BORDER = {
-    top: { style: "thin", color: { rgb: "000000" } },
-    bottom: { style: "thin", color: { rgb: "000000" } },
-    left: { style: "thin", color: { rgb: "000000" } },
-    right: { style: "thin", color: { rgb: "000000" } },
-  };
-
-  const buildRmbWorksheet = (trip, header) => {
+  // ===== CETAK RMB (Rencana Muat Barang) =====
+  // Langsung cetak (window.print) tanpa modal isian — data header yang
+  // gak ada di sistem (No SO, PA/EMKL, No Polisi, No Cont, LPN) dibiarin
+  // kosong di form-nya, biar bisa diisi manual/dicap di kertas kalau perlu.
+  const buildRmbPrintHtml = (trip) => {
     const items = trip.items || [];
-    const ws = {};
-    const merges = [];
-
-    const put = (addr, value, style) => {
-      ws[addr] = {
-        v: value,
-        t: typeof value === "number" ? "n" : "s",
-        s: style,
-      };
-    };
-
-    // Nulis 1 "kolom logis" tabel yang sebenarnya gabungan beberapa kolom
-    // Excel (biar gak ada kotak/border kepotong-potong kayak sebelumnya).
-    // colStart/colEnd = huruf kolom Excel, rowNum = nomor baris (1-based).
-    const putCell = (rowNum, colStart, colEnd, value, style) => {
-      put(`${colStart}${rowNum}`, value, style);
-      if (colStart !== colEnd) {
-        merges.push({
-          s: { r: rowNum - 1, c: XLSX.utils.decode_col(colStart) },
-          e: { r: rowNum - 1, c: XLSX.utils.decode_col(colEnd) },
-        });
-      }
-    };
-
-    const labelStyle = { font: { bold: true, sz: 10 } };
-    const valueStyle = { font: { sz: 10 } };
-    const titleStyle = {
-      font: { bold: true, sz: 16 },
-      alignment: { horizontal: "center", vertical: "center" },
-    };
-    const theadStyle = {
-      font: { bold: true, sz: 9, color: { rgb: "FFFFFF" } },
-      fill: { fgColor: { rgb: "374151" } },
-      alignment: { horizontal: "center", vertical: "center", wrapText: true },
-      border: RMB_BORDER,
-    };
-    const cellStyle = {
-      font: { sz: 9 },
-      alignment: { vertical: "center" },
-      border: RMB_BORDER,
-    };
-    const cellCenter = {
-      ...cellStyle,
-      alignment: { horizontal: "center", vertical: "center" },
-    };
-    const cellRight = {
-      ...cellStyle,
-      alignment: { horizontal: "right", vertical: "center" },
-    };
-
-    // Kolom tabel dari kiri ke kanan, tiap grup boleh gabungan beberapa
-    // kolom Excel (biar lega) tapi tetap NYAMBUNG satu sama lain (gak ada
-    // kolom kosong di antaranya) supaya border-nya jadi 1 kotak rapi.
-    const COL = {
-      no: ["B", "B"],
-      kodeItem: ["C", "E"],
-      deskripsi: ["F", "G"],
-      kirim: ["H", "I"],
-      extra: ["J", "J"],
-      sInv: ["K", "K"],
-      stok: ["L", "L"],
-      aktual: ["M", "P"],
-      uom: ["Q", "Q"],
-      m3: ["R", "S"],
-      shippIns: ["T", "U"],
-      packIns: ["V", "V"],
-      noSo: ["W", "W"],
-    };
-
     const today = new Date().toLocaleDateString("id-ID");
 
-    // ---- Header perusahaan ----
-    put("B2", "PT. GAJAH TUNGGAL TBK", { font: { bold: true, sz: 12 } });
-    put("B3", "TANGERANG", valueStyle);
-    put("M2", "DATE", labelStyle);
-    put("P2", ":", labelStyle);
-    put("R2", today, valueStyle);
-    put("M3", "PAGE", labelStyle);
-    put("P3", ":", labelStyle);
-    put("R3", "1 / 1", valueStyle);
-
-    // ---- Judul ----
-    put("F6", "RENCANA MUAT BARANG", titleStyle);
-
-    // ---- Info trip ----
-    put("B9", "NO SO", labelStyle);
-    put("D9", ":", labelStyle);
-    put("E9", header.no_so || "", valueStyle);
-
-    put("B10", "CUSTOMER", labelStyle);
-    put("D10", ":", labelStyle);
-    put("E10", header.customer || "GT DC Karawang", valueStyle);
-    put("K10", "PA/EMKL", labelStyle);
-    put("M10", ":", labelStyle);
-    put("N10", header.pa_emkl || "", valueStyle);
-
-    put("B11", "KOTA", labelStyle);
-    put("D11", ":", labelStyle);
-    put("E11", header.kota || "Jawa Barat", valueStyle);
-    put("K11", "JEN. KEND", labelStyle);
-    put("M11", ":", labelStyle);
-    put("N11", header.jen_kend || "", valueStyle);
-
-    put("B12", "NO KIRIM", labelStyle);
-    put("D12", ":", labelStyle);
-    put("E12", trip.no_trip || "", valueStyle);
-    put("K12", "NO POLISI", labelStyle);
-    put("M12", ":", labelStyle);
-    put("N12", header.no_polisi || "", valueStyle);
-
-    put("B13", "TGL KIRIM", labelStyle);
-    put("D13", ":", labelStyle);
-    put("E13", today, valueStyle);
-    put("K13", "NO CONT", labelStyle);
-    put("M13", ":", labelStyle);
-    put("N13", header.no_cont || "", valueStyle);
-
-    put("B14", "NAMA TRIP", labelStyle);
-    put("D14", ":", labelStyle);
-    put("E14", header.nama_trip || trip.no_trip || "", valueStyle);
-    put("K14", "LPN", labelStyle);
-    put("M14", ":", labelStyle);
-    put("N14", header.lpn || "", valueStyle);
-
-    // ---- Header tabel ----
-    putCell(16, ...COL.no, "NO.", theadStyle);
-    putCell(16, ...COL.kodeItem, "KODE ITEM", theadStyle);
-    putCell(16, ...COL.deskripsi, "DESKRIPSI", theadStyle);
-    putCell(16, ...COL.kirim, "KIRIM", theadStyle);
-    putCell(16, ...COL.extra, "EXTRA", theadStyle);
-    putCell(16, ...COL.sInv, "S.INV", theadStyle);
-    putCell(16, ...COL.stok, "STOK", theadStyle);
-    putCell(16, ...COL.aktual, "AKTUAL", theadStyle);
-    putCell(16, ...COL.uom, "UOM", theadStyle);
-    putCell(16, ...COL.m3, "M3", theadStyle);
-    putCell(16, ...COL.shippIns, "SHIPP.INS.", theadStyle);
-    putCell(16, ...COL.packIns, "PACK.INS.", theadStyle);
-    putCell(16, ...COL.noSo, "NO SO.", theadStyle);
-
-    // ---- Baris item ----
-    let row = 17;
     let totalQty = 0;
     let totalM3 = 0;
     let totalKg = 0;
 
-    items.forEach((item, idx) => {
-      const qty = Number(item.qty || 0);
-      const volume = Number(
-        item.total_volume ?? qty * Number(item.volume || 0),
-      );
-      const berat = Number(item.total_berat ?? qty * Number(item.berat || 0));
+    const rows = items
+      .map((item, idx) => {
+        const qty = Number(item.qty || 0);
+        const volume = Number(
+          item.total_volume ?? qty * Number(item.volume || 0),
+        );
+        const berat = Number(item.total_berat ?? qty * Number(item.berat || 0));
 
-      totalQty += qty;
-      totalM3 += volume;
-      totalKg += berat;
+        totalQty += qty;
+        totalM3 += volume;
+        totalKg += berat;
 
-      putCell(row, ...COL.no, idx + 1, cellCenter);
-      putCell(row, ...COL.kodeItem, item.item || "", cellStyle);
-      putCell(row, ...COL.deskripsi, item.deskripsi || "", cellStyle);
-      putCell(row, ...COL.kirim, qty, cellRight);
-      putCell(row, ...COL.extra, "", cellCenter);
-      putCell(row, ...COL.sInv, "BPW1", cellCenter);
-      putCell(row, ...COL.stok, "", cellCenter);
-      putCell(row, ...COL.aktual, "", cellCenter);
-      putCell(row, ...COL.uom, "PCS", cellCenter);
-      putCell(row, ...COL.m3, Number(volume.toFixed(3)), cellRight);
-      putCell(row, ...COL.shippIns, "", cellStyle);
-      putCell(row, ...COL.packIns, "", cellStyle);
-      putCell(row, ...COL.noSo, header.no_so || "", cellCenter);
+        return `
+      <tr>
+        <td class="c">${idx + 1}</td>
+        <td>${item.item || ""}</td>
+        <td>${item.deskripsi || ""}</td>
+        <td class="r">${qty.toLocaleString("id-ID")}</td>
+        <td class="c"></td>
+        <td class="c">BPW1</td>
+        <td class="c"></td>
+        <td class="c"></td>
+        <td class="c">PCS</td>
+        <td class="r">${volume.toLocaleString("id-ID", {
+          minimumFractionDigits: 3,
+          maximumFractionDigits: 3,
+        })}</td>
+        <td></td>
+        <td></td>
+        <td class="c"></td>
+      </tr>`;
+      })
+      .join("");
 
-      row += 1;
-    });
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>RMB - ${trip.no_trip || ""}</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #1e293b; font-size: 11px; margin: 0; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .company { font-weight: 700; font-size: 13px; }
+  .addr { font-size: 11px; }
+  .meta { text-align: right; font-size: 11px; }
+  h1 { text-align: center; font-size: 20px; margin: 8px 0 18px; letter-spacing: 1px; }
+  .info { display: flex; justify-content: space-between; gap: 40px; margin-bottom: 16px; }
+  .info table { border-collapse: collapse; }
+  .info td { padding: 2px 6px; font-size: 11px; vertical-align: top; }
+  .info td.label { font-weight: 700; white-space: nowrap; }
+  table.items { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  table.items th, table.items td { border: 1px solid #64748b; padding: 4px 6px; font-size: 10.5px; }
+  table.items th { background: #374151; color: #fff; text-align: center; }
+  table.items td.c { text-align: center; }
+  table.items td.r { text-align: right; }
+  .totals { display: flex; justify-content: flex-end; gap: 30px; margin-top: 10px; font-weight: 700; font-size: 11px; }
+  .sign { display: flex; justify-content: space-between; margin-top: 60px; text-align: center; font-size: 11px; }
+  .sign > div { width: 30%; }
+  .sign .line { margin-top: 60px; border-top: 1px solid #000; padding-top: 4px; }
+  @media print {
+    .no-print { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div>
+      <div class="company">PT. GAJAH TUNGGAL TBK</div>
+      <div class="addr">TANGERANG</div>
+    </div>
+    <div class="meta">
+      <div>DATE : ${today}</div>
+      <div>PAGE : 1 / 1</div>
+    </div>
+  </div>
 
-    // ---- Total ----
-    const totalRow = row + 1;
-    put(`F${totalRow}`, "TOTAL PCS", labelStyle);
-    put(`G${totalRow}`, ":", labelStyle);
-    put(`H${totalRow}`, totalQty, {
-      ...valueStyle,
-      alignment: { horizontal: "right" },
-    });
-    put(`K${totalRow}`, "TOTAL M3", labelStyle);
-    put(`M${totalRow}`, ":", labelStyle);
-    put(`Q${totalRow}`, Number(totalM3.toFixed(3)), {
-      ...valueStyle,
-      alignment: { horizontal: "right" },
-    });
-    put(`U${totalRow}`, "TOTAL KG :", labelStyle);
-    put(`V${totalRow}`, Number(totalKg.toFixed(2)), {
-      ...valueStyle,
-      alignment: { horizontal: "right" },
-    });
+  <h1>RENCANA MUAT BARANG</h1>
 
-    // ---- Tanda tangan ----
-    const signRow = totalRow + 3;
-    put(`G${signRow}`, "MENGETAHUI,", labelStyle);
-    put(`Q${signRow}`, "MENYERAHKAN,", labelStyle);
-    put(`U${signRow}`, "MENERIMA,", labelStyle);
+  <div class="info">
+    <table>
+      <tr><td class="label">NO SO</td><td>:</td><td></td></tr>
+      <tr><td class="label">CUSTOMER</td><td>:</td><td>GT DC Karawang</td></tr>
+      <tr><td class="label">KOTA</td><td>:</td><td>Jawa Barat</td></tr>
+      <tr><td class="label">NO KIRIM</td><td>:</td><td>${trip.no_trip || ""}</td></tr>
+      <tr><td class="label">TGL KIRIM</td><td>:</td><td>${today}</td></tr>
+      <tr><td class="label">NAMA TRIP</td><td>:</td><td>${trip.no_trip || ""}</td></tr>
+    </table>
+    <table>
+      <tr><td class="label">PA/EMKL</td><td>:</td><td></td></tr>
+      <tr><td class="label">JEN. KEND</td><td>:</td><td></td></tr>
+      <tr><td class="label">NO POLISI</td><td>:</td><td></td></tr>
+      <tr><td class="label">NO CONT</td><td>:</td><td></td></tr>
+      <tr><td class="label">LPN</td><td>:</td><td></td></tr>
+    </table>
+  </div>
 
-    const signNameRow = signRow + 6;
-    put(`H${signNameRow}`, "(   SH PERENCANAAN   )", valueStyle);
-    put(`Q${signNameRow}`, "(                          )", valueStyle);
-    put(`U${signNameRow}`, "(                          )", valueStyle);
+  <table class="items">
+    <thead>
+      <tr>
+        <th>NO.</th>
+        <th>KODE ITEM</th>
+        <th>DESKRIPSI</th>
+        <th>KIRIM</th>
+        <th>EXTRA</th>
+        <th>S.INV</th>
+        <th>STOK</th>
+        <th>AKTUAL</th>
+        <th>UOM</th>
+        <th>M3</th>
+        <th>SHIPP.INS.</th>
+        <th>PACK.INS.</th>
+        <th>NO SO.</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows}
+    </tbody>
+  </table>
 
-    ws["!ref"] = `A1:W${signNameRow + 2}`;
-    ws["!cols"] = [
-      { wch: 3 },
-      { wch: 6 },
-      { wch: 13 },
-      { wch: 3 },
-      { wch: 10 },
-      { wch: 22 },
-      { wch: 6 },
-      { wch: 8 },
-      { wch: 3 },
-      { wch: 7 },
-      { wch: 7 },
-      { wch: 7 },
-      { wch: 9 },
-      { wch: 3 },
-      { wch: 3 },
-      { wch: 3 },
-      { wch: 6 },
-      { wch: 9 },
-      { wch: 9 },
-      { wch: 15 },
-      { wch: 3 },
-      { wch: 13 },
-      { wch: 10 },
-    ];
-    ws["!merges"] = [XLSX.utils.decode_range("F6:N6"), ...merges];
+  <div class="totals">
+    <div>TOTAL PCS : ${totalQty.toLocaleString("id-ID")}</div>
+    <div>TOTAL M3 : ${totalM3.toLocaleString("id-ID", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}</div>
+    <div>TOTAL KG : ${totalKg.toLocaleString("id-ID", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}</div>
+  </div>
 
-    return ws;
+  <div class="sign">
+    <div>
+      <div>MENGETAHUI,</div>
+      <div class="line">( SH PERENCANAAN )</div>
+    </div>
+    <div>
+      <div>MENYERAHKAN,</div>
+      <div class="line">(&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;)</div>
+    </div>
+    <div>
+      <div>MENERIMA,</div>
+      <div class="line">(&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;)</div>
+    </div>
+  </div>
+</body>
+</html>`;
   };
 
-  // Buka form isian data pengiriman (No SO, PA/EMKL, No Polisi, dst — data
-  // ini gak disimpan di sistem, jadi diisi manual tiap kali mau cetak),
-  // lalu generate & download file RMB untuk 1 trip.
-  const handlePrintRmb = async (trip) => {
+  // Langsung buka window print, gak ada modal isian sama sekali.
+  const handlePrintRmb = (trip) => {
     if (!trip.items.length) {
       Swal.fire(
         "Belum Ada Item",
@@ -725,50 +819,24 @@ export default function TransferPlanPage() {
       return;
     }
 
-    const { value: header } = await Swal.fire({
-      title: `Cetak RMB — ${trip.no_trip}`,
-      html: `
-        <div style="text-align:left;font-size:13px;display:flex;flex-direction:column;gap:6px;">
-          <label>No SO<input id="rmb-no-so" class="swal2-input" style="margin:2px 0;height:36px;"></label>
-          <label>Customer<input id="rmb-customer" class="swal2-input" style="margin:2px 0;height:36px;" value="GT DC Karawang"></label>
-          <label>Kota<input id="rmb-kota" class="swal2-input" style="margin:2px 0;height:36px;" value="Jawa Barat"></label>
-          <label>Nama Trip<input id="rmb-nama-trip" class="swal2-input" style="margin:2px 0;height:36px;"></label>
-          <label>PA / EMKL<input id="rmb-pa-emkl" class="swal2-input" style="margin:2px 0;height:36px;"></label>
-          <label>Jenis Kendaraan<input id="rmb-jen-kend" class="swal2-input" style="margin:2px 0;height:36px;"></label>
-          <label>No Polisi<input id="rmb-no-polisi" class="swal2-input" style="margin:2px 0;height:36px;"></label>
-          <label>No Container<input id="rmb-no-cont" class="swal2-input" style="margin:2px 0;height:36px;"></label>
-          <label>LPN<input id="rmb-lpn" class="swal2-input" style="margin:2px 0;height:36px;"></label>
-        </div>
-      `,
-      focusConfirm: false,
-      showCancelButton: true,
-      confirmButtonText: "Cetak RMB",
-      cancelButtonText: "Batal",
-      confirmButtonColor: "#2563eb",
-      preConfirm: () => ({
-        no_so: document.getElementById("rmb-no-so").value.trim(),
-        customer: document.getElementById("rmb-customer").value.trim(),
-        kota: document.getElementById("rmb-kota").value.trim(),
-        nama_trip: document.getElementById("rmb-nama-trip").value.trim(),
-        pa_emkl: document.getElementById("rmb-pa-emkl").value.trim(),
-        jen_kend: document.getElementById("rmb-jen-kend").value.trim(),
-        no_polisi: document.getElementById("rmb-no-polisi").value.trim(),
-        no_cont: document.getElementById("rmb-no-cont").value.trim(),
-        lpn: document.getElementById("rmb-lpn").value.trim(),
-      }),
-    });
+    const html = buildRmbPrintHtml(trip);
+    const printWindow = window.open("", "_blank", "width=1200,height=800");
 
-    if (!header) return;
+    if (!printWindow) {
+      Swal.fire(
+        "Gagal Membuka Print",
+        "Browser memblokir pop-up. Izinkan pop-up buat halaman ini lalu coba lagi.",
+        "warning",
+      );
+      return;
+    }
 
-    const wb = XLSX.utils.book_new();
-    const ws = buildRmbWorksheet(trip, header);
-    XLSX.utils.book_append_sheet(wb, ws, "RMB");
-    XLSX.writeFile(
-      wb,
-      `RMB_${(trip.no_trip || "TRIP").replace(/[^a-zA-Z0-9-]/g, "")}_${new Date()
-        .toISOString()
-        .slice(0, 10)}.xlsx`,
-    );
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.onload = () => {
+      printWindow.focus();
+      printWindow.print();
+    };
   };
 
   const handleExportManualTripPlan = () => {
@@ -1313,6 +1381,18 @@ export default function TransferPlanPage() {
                 >
                   Preview Item Request &amp; Stok
                 </h2>
+                <p
+                  style={{
+                    margin: "4px 0 0",
+                    fontSize: 11.5,
+                    color: "#64748b",
+                  }}
+                >
+                  Klik <strong>Generate Trip Otomatis</strong> buat bikinin trip
+                  sendiri (max 4 item &amp; kapasitas truk per trip) berdasarkan
+                  stok Tangerang yang tersedia. Kalau stok gak cukup, qty diisi
+                  sebagian dulu.
+                </p>
               </div>
 
               <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
@@ -1341,6 +1421,43 @@ export default function TransferPlanPage() {
                     <RefreshCw size={14} />
                   )}
                   Refresh
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleAutoGenerateTrip}
+                  disabled={loadingRencanaTransfer || previewItems.length === 0}
+                  title="Generate trip otomatis berdasarkan stok Tangerang"
+                  style={{
+                    height: 34,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "0 14px",
+                    border: "1px solid #bbf7d0",
+                    background: "#f0fdf4",
+                    color: "#15803d",
+                    borderRadius: 8,
+                    cursor:
+                      loadingRencanaTransfer || previewItems.length === 0
+                        ? "not-allowed"
+                        : "pointer",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    opacity:
+                      loadingRencanaTransfer || previewItems.length === 0
+                        ? 0.6
+                        : 1,
+                  }}
+                >
+                  {loadingRencanaTransfer ? (
+                    <Loader2 size={14} className="ko-spin" />
+                  ) : (
+                    <Wand2 size={14} />
+                  )}
+                  {loadingRencanaTransfer
+                    ? "Generate..."
+                    : "Generate Trip Otomatis"}
                 </button>
 
                 <button
@@ -1411,8 +1528,6 @@ export default function TransferPlanPage() {
                       <th style={{ whiteSpace: "nowrap" }}>Sisa</th>
                       <th style={{ whiteSpace: "nowrap" }}>Stok Tangerang</th>
                       <th style={{ whiteSpace: "nowrap" }}>Stok Karawang</th>
-                      <th style={{ whiteSpace: "nowrap" }}>Qty</th>
-                      <th style={{ whiteSpace: "nowrap" }}>Masukkan ke Trip</th>
                     </tr>
                   </thead>
 
@@ -1484,87 +1599,6 @@ export default function TransferPlanPage() {
                             {Number(item.stok_karawang || 0).toLocaleString(
                               "id-ID",
                             )}
-                          </td>
-
-                          <td>
-                            <input
-                              type="number"
-                              min={0}
-                              placeholder=""
-                              value={rowQty[item.item] ?? ""}
-                              onChange={(e) =>
-                                setRowQty((prev) => ({
-                                  ...prev,
-                                  [item.item]: e.target.value,
-                                }))
-                              }
-                              style={{
-                                width: 78,
-                                padding: "6px 8px",
-                                border: "1px solid #cbd5e1",
-                                borderRadius: 6,
-                                fontSize: 12,
-                                fontWeight: 700,
-                                textAlign: "center",
-                              }}
-                            />
-                          </td>
-
-                          <td>
-                            <div
-                              style={{
-                                display: "flex",
-                                gap: 6,
-                                alignItems: "center",
-                              }}
-                            >
-                              <select
-                                value={rowTripSelect[item.item] || "__new__"}
-                                onChange={(e) =>
-                                  setRowTripSelect((prev) => ({
-                                    ...prev,
-                                    [item.item]: e.target.value,
-                                  }))
-                                }
-                                style={{
-                                  padding: "6px 8px",
-                                  border: "1px solid #cbd5e1",
-                                  borderRadius: 6,
-                                  fontSize: 12,
-                                  fontWeight: 600,
-                                  color: "#334155",
-                                  minWidth: 130,
-                                }}
-                              >
-                                <option value="__new__">+ Trip Baru</option>
-                                {manualTrips.map((trip) => (
-                                  <option key={trip.id} value={trip.id}>
-                                    {trip.no_trip}
-                                  </option>
-                                ))}
-                              </select>
-
-                              <button
-                                type="button"
-                                onClick={() => assignItemToTrip(item)}
-                                title="Masukkan ke trip"
-                                style={{
-                                  height: 30,
-                                  width: 30,
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  border: "1px solid #bfdbfe",
-                                  background: "#eff6ff",
-                                  color: "#1d4ed8",
-                                  borderRadius: 6,
-                                  cursor: "pointer",
-                                  flexShrink: 0,
-                                }}
-                              >
-                                <ArrowRight size={14} />
-                              </button>
-                            </div>
                           </td>
                         </tr>
                       );
@@ -2000,19 +2034,18 @@ export default function TransferPlanPage() {
                 </div>
 
                 {/* ITEMS */}
-                {trip.items.length === 0 ? (
-                  <div
-                    style={{
-                      padding: "16px 14px",
-                      color: "#94a3b8",
-                      fontSize: 12,
-                    }}
-                  >
-                    Belum ada item di trip ini. Pilih trip ini dari tabel
-                    preview di atas.
-                  </div>
-                ) : (
-                  <div style={{ padding: 12 }}>
+                <div style={{ padding: 12 }}>
+                  {trip.items.length === 0 ? (
+                    <div
+                      style={{
+                        padding: "10px 2px 14px",
+                        color: "#94a3b8",
+                        fontSize: 12,
+                      }}
+                    >
+                      Belum ada item di trip ini. Tambahin item manual di bawah.
+                    </div>
+                  ) : (
                     <div style={{ overflowX: "auto" }}>
                       <table className="ko-data-table" style={{ margin: 0 }}>
                         <thead>
@@ -2031,11 +2064,28 @@ export default function TransferPlanPage() {
                             <tr key={`${trip.id}-${item.item}`}>
                               <td className="ko-mono">{item.item}</td>
                               <td>{item.deskripsi || "-"}</td>
-                              <td
-                                className="ko-mono"
-                                style={{ textAlign: "center", fontWeight: 700 }}
-                              >
-                                {Number(item.qty || 0).toLocaleString("id-ID")}
+                              <td>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={item.qty ?? 0}
+                                  onChange={(e) =>
+                                    updateManualTripItemQty(
+                                      trip.id,
+                                      item.item,
+                                      e.target.value,
+                                    )
+                                  }
+                                  style={{
+                                    width: 74,
+                                    padding: "5px 7px",
+                                    border: "1px solid #cbd5e1",
+                                    borderRadius: 6,
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                    textAlign: "center",
+                                  }}
+                                />
                               </td>
                               <td>
                                 {Number(item.volume || 0).toLocaleString(
@@ -2085,8 +2135,104 @@ export default function TransferPlanPage() {
                         </tbody>
                       </table>
                     </div>
-                  </div>
-                )}
+                  )}
+
+                  {/* TAMBAH ITEM MANUAL */}
+                  {trip.items.length >= 4 ? (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        fontSize: 11,
+                        color: "#94a3b8",
+                        fontStyle: "italic",
+                      }}
+                    >
+                      Trip ini udah penuh (maksimal 4 item). Hapus salah satu
+                      item dulu kalau mau nambah item lain.
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        display: "flex",
+                        gap: 8,
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        paddingTop: 10,
+                        borderTop:
+                          trip.items.length > 0 ? "1px dashed #e2e8f0" : "none",
+                      }}
+                    >
+                      <select
+                        value={addItemForm[trip.id]?.itemCode || ""}
+                        onChange={(e) =>
+                          updateAddItemForm(trip.id, "itemCode", e.target.value)
+                        }
+                        style={{
+                          flex: "1 1 260px",
+                          minWidth: 200,
+                          padding: "7px 8px",
+                          border: "1px solid #cbd5e1",
+                          borderRadius: 6,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: "#334155",
+                        }}
+                      >
+                        <option value="">
+                          + Pilih item buat ditambahin...
+                        </option>
+                        {previewItems.map((it) => (
+                          <option key={it.item} value={it.item}>
+                            {it.item} — {it.deskripsi || "-"}
+                          </option>
+                        ))}
+                      </select>
+
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="Qty"
+                        value={addItemForm[trip.id]?.qty ?? ""}
+                        onChange={(e) =>
+                          updateAddItemForm(trip.id, "qty", e.target.value)
+                        }
+                        style={{
+                          width: 90,
+                          padding: "7px 8px",
+                          border: "1px solid #cbd5e1",
+                          borderRadius: 6,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          textAlign: "center",
+                        }}
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => addManualItemToTrip(trip.id)}
+                        style={{
+                          height: 32,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "0 12px",
+                          border: "1px solid #bfdbfe",
+                          background: "#eff6ff",
+                          color: "#1d4ed8",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          fontSize: 12,
+                          fontWeight: 700,
+                          flexShrink: 0,
+                        }}
+                      >
+                        <Plus size={14} />
+                        Tambah Item
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             );
           })}
