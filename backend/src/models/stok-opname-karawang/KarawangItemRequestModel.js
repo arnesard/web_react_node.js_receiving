@@ -45,7 +45,7 @@ class KarawangItemReqModel {
     const [reqRows] = await poolUtama.query(`
       SELECT TRIM(UPPER(item)) AS item, SUM(CAST(qty AS DECIMAL(15,3))) AS qty
       FROM stok_opname_karawang_item_req
-      WHERE date = CURDATE() AND UPPER(jenis) = 'TIRE'
+      WHERE date = CURDATE() AND UPPER(jenis) LIKE 'OE TIRE%'
       GROUP BY TRIM(UPPER(item))
     `);
 
@@ -111,12 +111,11 @@ class KarawangItemReqModel {
     LEFT JOIN stok_opname_karawang_master_item m
       ON r.item = m.code_no
     WHERE r.date = CURDATE()
-      AND UPPER(r.jenis) <> 'TIRE'
+      AND UPPER(r.jenis) NOT LIKE 'OE TIRE%'
     GROUP BY r.jenis
   `);
 
-    // Kategori TIRE dihitung terpisah, gabungan item_req + sch_oem + do_cd
-    // biar sinkron sama Trip Planner.
+    // Kategori TIRE dihitung terpisah, gabungan item_req + sch_oem + do_cd.
     const tireMap = await this._getCombinedTireQtyMap();
     if (tireMap.size > 0) {
       const itemCodes = Array.from(tireMap.keys());
@@ -190,6 +189,59 @@ class KarawangItemReqModel {
     return rows;
   }
 
+  // Trip Planner: qty Request MURNI dari Upload Item Request manual
+  // (stok_opname_karawang_item_req, jenis TIRE, hari ini) — TIDAK digabung
+  // sama sch_oem/do_cd lagi (beda dengan _getCombinedTireQtyMap yang masih
+  // dipakai getSummary buat card ringkasan).
+  static async getTireTripItemsFromRequestOnly() {
+    const [reqRows] = await poolUtama.query(`
+      SELECT TRIM(UPPER(item)) AS item, SUM(CAST(qty AS DECIMAL(15,3))) AS qty
+      FROM stok_opname_karawang_item_req
+      WHERE date = CURDATE() AND UPPER(jenis) LIKE 'OE TIRE%'
+      GROUP BY TRIM(UPPER(item))
+    `);
+
+    if (reqRows.length === 0) return [];
+
+    const itemCodes = reqRows.map((r) => r.item);
+
+    const [masterRows] = await poolUtama.query(
+      `SELECT TRIM(UPPER(code_no)) AS code_no, description, volume
+       FROM stok_opname_karawang_master_item
+       WHERE TRIM(UPPER(code_no)) IN (?)`,
+      [itemCodes],
+    );
+    const masterMap = new Map(masterRows.map((m) => [m.code_no, m]));
+
+    return reqRows.map((r) => {
+      const qty = Number(r.qty || 0);
+      const master = masterMap.get(r.item);
+      const volume = Number(master?.volume || 0);
+      const deskripsi = master?.description || "-";
+
+      return {
+        item: r.item,
+        qty,
+        deskripsi,
+        volume,
+        total_volume: Number((qty * volume).toFixed(3)),
+      };
+    });
+  }
+
+  // No Trip / do_number generate on-the-fly (gak disimpan ke DB), format
+  // sama kayak pola do_number Cross Docking: T-2 + tanggal DDMMYY + urutan
+  // 3 digit (001, 002, dst), reset tiap hari & tiap kali halaman dibuka.
+  static generateDoNumber(sequence) {
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, "0");
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const yy = String(now.getFullYear()).slice(-2);
+    const seq = String(sequence).padStart(3, "0");
+
+    return `T-2${dd}${mm}${yy}${seq}`;
+  }
+
   static buildTireTrips(items, kapasitas = 52) {
     const capacity = Number(kapasitas);
 
@@ -225,6 +277,7 @@ class KarawangItemReqModel {
           item: item.item,
           deskripsi: item.deskripsi,
           qty: qtyRemaining,
+          request_qty: qtyRemaining,
           volume: volumePerQty,
           total_volume: 0,
         });
@@ -291,6 +344,7 @@ class KarawangItemReqModel {
           item: item.item,
           deskripsi: item.deskripsi,
           qty: qtyToPut,
+          request_qty: qtyToPut,
           volume: volumePerQty,
           total_volume: volume,
         });

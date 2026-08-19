@@ -51,6 +51,7 @@ async function enrichWithBcCollie(
   }
 
   const barcodeToBcCollie = new Map();
+  const barcodeToLastUpdate = new Map();
   let anyPairFailed = false;
   let loggedSampleKeys = false; // debug: cetak sekali aja biar log gak banjir
 
@@ -66,8 +67,10 @@ async function enrichWithBcCollie(
         // tipe beda (angka vs string) walau nilainya sama.
         const barcodeRaw = getField(detailRow, "barcode");
         const bcCollie = getField(detailRow, "bc_collie");
+        const lastUpdate = getField(detailRow, "lastupdated");
         if (barcodeRaw !== undefined) {
           barcodeToBcCollie.set(String(barcodeRaw), bcCollie);
+          barcodeToLastUpdate.set(String(barcodeRaw), lastUpdate);
         }
         if (!loggedSampleKeys) {
           loggedSampleKeys = true;
@@ -76,6 +79,8 @@ async function enrichWithBcCollie(
             Object.keys(detailRow || {}),
             "-> bc_collie kebaca:",
             bcCollie,
+            "-> lastupdated kebaca:",
+            lastUpdate,
           );
         }
       });
@@ -95,7 +100,11 @@ async function enrichWithBcCollie(
       barcode !== undefined && barcodeToBcCollie.has(barcode)
         ? barcodeToBcCollie.get(barcode)
         : undefined;
-    return { ...row, bc_collie: bcCollie };
+    const lastUpdate =
+      barcode !== undefined && barcodeToLastUpdate.has(barcode)
+        ? barcodeToLastUpdate.get(barcode)
+        : undefined;
+    return { ...row, bc_collie: bcCollie, last_update: lastUpdate };
   });
 
   return {

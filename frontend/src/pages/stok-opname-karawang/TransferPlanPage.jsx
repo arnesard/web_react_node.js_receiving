@@ -226,6 +226,7 @@ export default function TransferPlanPage() {
       return {
         ...prev,
         trips,
+        total_request: prev.total_request,
         total_qty: trips.reduce(
           (total, trip) => total + Number(trip.total_qty || 0),
           0,
@@ -856,20 +857,16 @@ export default function TransferPlanPage() {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
                 gap: 10,
-                marginBottom: 18,
+                marginBottom: 10,
               }}
             >
               {[
                 ["Item", tireTripPlan.total_item],
-                ["Qty", Number(tireTripPlan.total_qty).toLocaleString("id-ID")],
                 [
-                  "Volume",
-                  `${Number(tireTripPlan.total_volume).toLocaleString("id-ID", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })} m³`,
+                  "Request",
+                  Number(tireTripPlan.total_request).toLocaleString("id-ID"),
                 ],
                 ["Trip", tireTripPlan.jumlah_trip],
               ].map(([label, value]) => (
@@ -898,6 +895,70 @@ export default function TransferPlanPage() {
                       fontSize: 20,
                       fontWeight: 800,
                       color: "#0f172a",
+                      marginTop: 5,
+                    }}
+                  >
+                    {value}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                gap: 10,
+                marginBottom: 18,
+              }}
+            >
+              {[
+                ["Qty", Number(tireTripPlan.total_qty).toLocaleString("id-ID")],
+                [
+                  "Selisih",
+                  Number(
+                    tireTripPlan.total_request - tireTripPlan.total_qty,
+                  ).toLocaleString("id-ID"),
+                ],
+                [
+                  "Volume",
+                  `${Number(tireTripPlan.total_volume).toLocaleString("id-ID", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })} m³`,
+                ],
+              ].map(([label, value]) => (
+                <div
+                  key={label}
+                  style={{
+                    background: "#f8fafc",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 10,
+                    padding: "12px 14px",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 10,
+                      color: "#94a3b8",
+                      fontWeight: 600,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {label}
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize: 20,
+                      fontWeight: 800,
+                      color:
+                        label === "Selisih" &&
+                        Number(
+                          tireTripPlan.total_request - tireTripPlan.total_qty,
+                        ) !== 0
+                          ? "#dc2626"
+                          : "#0f172a",
                       marginTop: 5,
                     }}
                   >
@@ -942,7 +1003,7 @@ export default function TransferPlanPage() {
                           color: "#0f172a",
                         }}
                       >
-                        Trip {trip.trip}
+                        {trip.do_number || `Trip ${trip.trip}`}
                       </strong>
 
                       <div
@@ -952,7 +1013,7 @@ export default function TransferPlanPage() {
                           marginTop: 3,
                         }}
                       >
-                        {trip.total_qty.toLocaleString("id-ID")} Qty
+                        Trip {trip.trip} · {trip.total_qty.toLocaleString("id-ID")} Qty
                       </div>
                     </div>
 

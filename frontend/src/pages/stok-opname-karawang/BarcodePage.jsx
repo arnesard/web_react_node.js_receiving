@@ -214,6 +214,7 @@ export default function KarawangBarcodePage() {
       "Transfer",
       "In WH",
       "Week",
+      "Receive",
     ];
     const rows = filteredItems.map((it) => [
       it.rak,
@@ -225,6 +226,7 @@ export default function KarawangBarcodePage() {
       it.transfer,
       it.in_wh,
       it.week,
+      it.receive,
     ]);
     const csv = [headers, ...rows]
       .map((row) => row.map(csvEscape).join(","))
@@ -468,12 +470,13 @@ export default function KarawangBarcodePage() {
                         <th>Transfer</th>
                         <th>In WH</th>
                         <th>Week</th>
+                        <th>Receive</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredItems.length === 0 && (
                         <tr>
-                          <td colSpan={9} className="ko-table-empty">
+                          <td colSpan={10} className="ko-table-empty">
                             Data tidak ditemukan.
                           </td>
                         </tr>
@@ -489,6 +492,7 @@ export default function KarawangBarcodePage() {
                           <td className="ko-mono">{it.transfer}</td>
                           <td className="ko-mono">{it.in_wh}</td>
                           <td>{it.week}</td>
+                          <td className="ko-mono">{it.receive}</td>
                         </tr>
                       ))}
                     </tbody>

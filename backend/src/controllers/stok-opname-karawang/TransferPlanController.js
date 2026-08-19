@@ -107,11 +107,19 @@ class TransferPlanController {
         return response.error(res, "Kapasitas trip harus lebih besar dari 0.");
       }
 
-      const items = await KarawangItemRequestModel.getTireTripItems();
+      const items =
+        await KarawangItemRequestModel.getTireTripItemsFromRequestOnly();
 
       const trips = KarawangItemRequestModel.buildTireTrips(items, kapasitas);
 
-      const totalQty = items.reduce(
+      // No Trip / do_number di-generate on-the-fly, urutan 1..N ngikutin
+      // urutan trip hasil bin-packing (bukan disimpan ke DB).
+      trips.forEach((trip, idx) => {
+        trip.trip = idx + 1;
+        trip.do_number = KarawangItemRequestModel.generateDoNumber(idx + 1);
+      });
+
+      const totalRequest = items.reduce(
         (sum, item) => sum + Number(item.qty || 0),
         0,
       );
@@ -124,7 +132,8 @@ class TransferPlanController {
       return response.success(res, {
         kapasitas,
         total_item: items.length,
-        total_qty: totalQty,
+        total_request: totalRequest,
+        total_qty: totalRequest,
         total_volume: Number(totalVolume.toFixed(3)),
         jumlah_trip: trips.length,
         trips,

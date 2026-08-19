@@ -89,6 +89,31 @@ function getIsoWeekFromInWh(inWh) {
   return Math.ceil(((thursday - yearStart) / 86400000 + 1) / 7);
 }
 
+// Format timestamp mentah dari Cross Docking (ISO UTC, mis.
+// "2026-07-29T06:20:20.000Z") jadi "DD/MM/YYYY, HH.mm.ss" zona waktu
+// Asia/Jakarta (WIB, UTC+7) — dipakai buat kolom Receive di Halaman
+// Barcode.
+function formatReceiveTimestamp(raw) {
+  if (!raw) return "";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return String(raw);
+
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Jakarta",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const get = (type) => parts.find((p) => p.type === type)?.value || "";
+
+  return `${get("day")}/${get("month")}/${get("year")}, ${get("hour")}.${get("minute")}.${get("second")}`;
+}
+
 // Cache dashboard di memory proses backend (bukan per-user, dan sekarang
 // SATU entry doang buat semua orang — dulu per batch_id, tapi konsep
 // batch udah dihapus total) — tujuannya biar 10 operator/atasan yang buka
@@ -180,12 +205,18 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
           collieRaw !== undefined && collieRaw !== null
             ? String(collieRaw).trim()
             : "";
+        const receiveRaw = getField(row, "last_update");
+        const receive =
+          receiveRaw !== undefined && receiveRaw !== null
+            ? String(receiveRaw).trim()
+            : "";
         return {
           item,
           rackcode,
           barcode,
           lokasi,
           collie,
+          receive,
         };
       })
       .filter(Boolean);
@@ -230,6 +261,7 @@ async function getBarcodeLiveData({ forceRefresh = false } = {}) {
         transfer: transfer || "-",
         in_wh: inWh || "-",
         week: inWh ? getIsoWeekFromInWh(inWh) || "-" : "-",
+        receive: r.receive ? formatReceiveTimestamp(r.receive) : "-",
       };
     });
 
