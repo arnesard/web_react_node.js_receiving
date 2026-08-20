@@ -196,15 +196,18 @@ class KarawangItemReqModel {
     return rows;
   }
 
-  // Trip Planner: qty Request MURNI dari Upload Item Request manual
-  // (stok_opname_karawang_item_req, jenis TIRE, hari ini) — TIDAK digabung
-  // sama sch_oem/do_cd lagi (beda dengan _getCombinedTireQtyMap yang masih
-  // dipakai getSummary buat card ringkasan).
+  // Trip Planner (Manual): qty Request MURNI dari Upload Item Request
+  // manual (stok_opname_karawang_item_req, SEMUA jenis hari ini — TIRE,
+  // OE TUBE, OE VALVE, dst) — TIDAK digabung sama sch_oem/do_cd lagi (beda
+  // dengan _getCombinedTireQtyMap yang masih dipakai getSummary buat card
+  // ringkasan & khusus TIRE). Dulu fungsi ini cuma filter 'OE TIRE%' karena
+  // Trip Plan awalnya cuma buat tire; sekarang manual trip planning juga
+  // ngover OE TUBE/OE VALVE makanya filter jenis-nya dibuka semua.
   static async getTireTripItemsFromRequestOnly() {
     const [reqRows] = await poolUtama.query(`
       SELECT TRIM(UPPER(item)) AS item, SUM(CAST(qty AS DECIMAL(15,3))) AS qty
       FROM stok_opname_karawang_item_req
-      WHERE date = CURDATE() AND UPPER(jenis) LIKE 'OE TIRE%'
+      WHERE date = CURDATE()
       GROUP BY TRIM(UPPER(item))
     `);
 

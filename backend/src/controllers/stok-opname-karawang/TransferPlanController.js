@@ -113,12 +113,12 @@ class TransferPlanController {
     }
   }
 
-  // Preview manual: item request TIRE hari ini (qty request), di-enrich
-  // stok Tangerang (Control Stock, db pandu/EDP) & stok Karawang (Control
-  // FIFO, Cross Docking) per item — dipakai user buat MANUAL milih No
-  // Trip + item mana yang mau dimasukkan ke tiap trip (bukan auto
-  // bin-packing lagi). Concurrency dibatasi (3) biar gak nembak EDP &
-  // Cross Docking sekaligus buat semua item.
+  // Preview manual: item request SEMUA jenis hari ini (TIRE, OE TUBE, OE
+  // VALVE, dst — qty request), di-enrich stok Tangerang (Control Stock,
+  // db pandu/EDP) & stok Karawang (Control FIFO, Cross Docking) per item —
+  // dipakai user buat MANUAL milih No Trip + item mana yang mau dimasukkan
+  // ke tiap trip (bukan auto bin-packing lagi). Concurrency dibatasi (3)
+  // biar gak nembak EDP & Cross Docking sekaligus buat semua item.
   async previewItemRequest(req, res) {
     try {
       const items =

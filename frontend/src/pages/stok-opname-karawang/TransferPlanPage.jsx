@@ -379,25 +379,78 @@ export default function TransferPlanPage() {
       );
 
       const cap = Number(truckCapacity) || 0;
+
+      // PECAH item yang qty PENUHNYA SENDIRIAN udah lebih besar dari 1
+      // truk (mis. 6.315 qty × 0,033 m³ = 208,4 m³ vs kapasitas 52 m³)
+      // jadi beberapa "chunk" yang masing² MUAT 1 truk. Tanpa ini, bin-
+      // packing di bawah gak akan pernah nemu trip yang muat (baik trip
+      // lama maupun baru — volumenya udah kegedean dari sononya), jadi
+      // dia kepaksa dorong semua qty ke 1 trip aja walau overflow parah.
+      // Sisa qty terakhir tiap item boleh < 1 truk penuh (itu wajar,
+      // nanti ditambal bareng item lain lewat best-fit di bawah).
+      const chunks = [];
+      sortedCandidates.forEach((item) => {
+        const volume = item.volume;
+        const rawQtyPerChunk =
+          cap > 0 && volume > 0
+            ? Math.max(1, Math.floor(cap / volume))
+            : item.allocQty;
+        // Chunk "penuh" (bukan sisa terakhir) dibulatkan KE BAWAH ke
+        // kelipatan 5 terdekat (5, 10, 15, 20, ...) biar qty per trip
+        // rapi, gak angka ganjil random kayak 1.575. Kalau kapasitas
+        // truk aja gak cukup buat 5 unit (item gede banget per pcs-nya),
+        // fallback ke qty asli biar tetep kepacking (gak dipaksa 0).
+        const qtyPerChunk =
+          rawQtyPerChunk >= 5
+            ? Math.floor(rawQtyPerChunk / 5) * 5
+            : rawQtyPerChunk;
+
+        let sisaQty = item.allocQty;
+        while (sisaQty > 0) {
+          // Chunk terakhir (sisa yang gak pas abis dibagi kelipatan 5)
+          // dibiarin apa adanya — gak dipaksa genap/kelipatan 5.
+          const chunkQty = Math.min(sisaQty, qtyPerChunk);
+          chunks.push({
+            ...item,
+            allocQty: chunkQty,
+            lineVolume: Number((chunkQty * volume).toFixed(3)),
+          });
+          sisaQty -= chunkQty;
+        }
+      });
+
+      // Re-sort chunk (bukan item mentah lagi) dari volume terbesar buat
+      // best-fit yang sebenarnya dijalanin di bawah.
+      chunks.sort((a, b) => b.lineVolume - a.lineVolume);
+
       const trips = [];
       let seq = manualTrips.length;
       let partialCount = 0;
+      const partialItemSeen = new Set();
 
-      sortedCandidates.forEach((item) => {
+      chunks.forEach((item) => {
         const berat = Number(item.berat || 0);
         const qty = item.allocQty;
         const itemVolume = item.lineVolume;
 
-        if (qty < item.sisa) partialCount += 1;
+        if (item.qty < item.sisa && !partialItemSeen.has(item.item)) {
+          partialItemSeen.add(item.item);
+          partialCount += 1;
+        }
 
-        // Cari trip existing yang masih muat (< 4 item & gak lewat kapasitas)
-        // dengan sisa ruang PALING KECIL (best fit) supaya truk yang udah
-        // lumayan penuh ditambalin dulu, bukan malah buka trip baru.
+        // Cari trip existing yang masih muat dengan sisa ruang PALING
+        // KECIL (best fit) supaya truk yang udah lumayan penuh ditambalin
+        // dulu, bukan malah buka trip baru. Batas "4 item per trip" tetep
+        // berlaku buat BARIS ITEM BEDA — tapi kalau item ini emang udah
+        // ada di trip itu (chunk lanjutan dari item yang sama), tetep
+        // boleh gabung walau trip udah ada 4 baris beda (gak nambah
+        // baris baru, cuma nambah qty di baris yang sama).
         let bestTrip = null;
         let bestLeftover = Infinity;
 
         trips.forEach((t) => {
-          if (t.items.length >= 4) return;
+          const sudahAdaItemIni = t.items.some((i) => i.item === item.item);
+          if (t.items.length >= 4 && !sudahAdaItemIni) return;
 
           const newVolume = Number((t._volume + itemVolume).toFixed(3));
           if (cap > 0 && newVolume > cap) return;
@@ -421,15 +474,26 @@ export default function TransferPlanPage() {
           trips.push(bestTrip);
         }
 
-        bestTrip.items.push({
-          item: item.item,
-          deskripsi: item.deskripsi,
-          qty,
-          volume: item.volume,
-          total_volume: itemVolume,
-          berat,
-          total_berat: Number((qty * berat).toFixed(2)),
-        });
+        const idx = bestTrip.items.findIndex((i) => i.item === item.item);
+        if (idx >= 0) {
+          const mergedQty = Number(bestTrip.items[idx].qty) + qty;
+          bestTrip.items[idx] = {
+            ...bestTrip.items[idx],
+            qty: mergedQty,
+            total_volume: Number((mergedQty * item.volume).toFixed(3)),
+            total_berat: Number((mergedQty * berat).toFixed(2)),
+          };
+        } else {
+          bestTrip.items.push({
+            item: item.item,
+            deskripsi: item.deskripsi,
+            qty,
+            volume: item.volume,
+            total_volume: itemVolume,
+            berat,
+            total_berat: Number((qty * berat).toFixed(2)),
+          });
+        }
         bestTrip._volume = Number((bestTrip._volume + itemVolume).toFixed(3));
       });
 
@@ -581,6 +645,46 @@ export default function TransferPlanPage() {
     const volume = Number(meta.volume || 0);
     const berat = Number(meta.berat || 0);
 
+    // ===== AUTO-CAP KAPASITAS TRUK =====
+    // Volume trip gak boleh lewat truckCapacity. Tube pasangan gak
+    // dihitung (volume-nya selalu 0, cek buildPairedTubeLine), jadi yang
+    // dicek cuma volume item utama. existingQty = qty item ini yang udah
+    // ada di trip (kalau nambahin lagi ke item yang sama), baseVolume =
+    // volume trip TANPA item ini (biar gak double-hitung pas dihitung
+    // ulang). Sisa kapasitas dipakai buat nentuin qty maksimal yang masih
+    // muat — kalau qty yang diminta user kelebihan, otomatis dipotong ke
+    // situ dan sisanya harus dibikinin trip baru manual sama user.
+    const existingQty = Number(
+      trip?.items.find((i) => i.item === itemCode)?.qty || 0,
+    );
+    const baseVolume = (trip?.items || [])
+      .filter((i) => i.item !== itemCode)
+      .reduce((sum, i) => sum + Number(i.total_volume || 0), 0);
+    const cap = Number(truckCapacity) || 0;
+    const remainingCapacity = cap > 0 ? cap - baseVolume : Infinity;
+    const maxQtyThatFits =
+      volume > 0
+        ? Math.max(0, Math.floor((remainingCapacity + Number.EPSILON) / volume))
+        : Infinity;
+
+    let qtyToAdd = qty;
+
+    if (maxQtyThatFits <= existingQty) {
+      Swal.fire(
+        "Kapasitas Truk Udah Penuh",
+        `Trip ini sisa kapasitasnya udah gak cukup buat nambahin ${itemCode}. Bikin trip baru buat sisa qty-nya.`,
+        "warning",
+      );
+      return;
+    }
+
+    if (existingQty + qty > maxQtyThatFits) {
+      qtyToAdd = maxQtyThatFits - existingQty;
+    }
+
+    const isCapped = qtyToAdd < qty;
+    const finalQty = qtyToAdd;
+
     setManualTrips((prev) =>
       prev.map((t) => {
         if (t.id !== tripId) return t;
@@ -589,7 +693,7 @@ export default function TransferPlanPage() {
 
         const idx = items.findIndex((i) => i.item === itemCode);
         if (idx >= 0) {
-          const mergedQty = Number(items[idx].qty) + qty;
+          const mergedQty = Number(items[idx].qty) + finalQty;
           items[idx] = {
             ...items[idx],
             qty: mergedQty,
@@ -600,21 +704,22 @@ export default function TransferPlanPage() {
           items.push({
             item: itemCode,
             deskripsi,
-            qty,
+            qty: finalQty,
             volume,
-            total_volume: Number((qty * volume).toFixed(3)),
+            total_volume: Number((finalQty * volume).toFixed(3)),
             berat,
-            total_berat: Number((qty * berat).toFixed(2)),
+            total_berat: Number((finalQty * berat).toFixed(2)),
           });
         }
 
-        // Auto-add / sync tube pasangan (qty 1:1 sama tire di atas).
+        // Auto-add / sync tube pasangan (qty 1:1 sama tire di atas, pake
+        // finalQty biar konsisten kalau qty tire-nya kena auto-cap).
         if (pairedTubeLine) {
           const tubeIdx = items.findIndex(
             (i) => i.item === pairedTubeLine.item,
           );
           if (tubeIdx >= 0) {
-            const mergedQty = Number(items[tubeIdx].qty) + qty;
+            const mergedQty = Number(items[tubeIdx].qty) + finalQty;
             items[tubeIdx] = {
               ...items[tubeIdx],
               qty: mergedQty,
@@ -626,7 +731,13 @@ export default function TransferPlanPage() {
               ),
             };
           } else {
-            items.push(pairedTubeLine);
+            items.push({
+              ...pairedTubeLine,
+              qty: finalQty,
+              total_berat: Number(
+                (finalQty * pairedTubeLine.berat).toFixed(2),
+              ),
+            });
           }
         }
 
@@ -638,6 +749,14 @@ export default function TransferPlanPage() {
       ...prev,
       [tripId]: { itemCode: "", qty: "" },
     }));
+
+    if (isCapped) {
+      Swal.fire(
+        "Qty Dipotong Otomatis",
+        `Sisa kapasitas trip ini cuma muat ${finalQty} dari ${qty} yang diminta. Sisanya (${qty - finalQty}) belum masuk — bikin trip baru buat nampung sisanya.`,
+        "info",
+      );
+    }
   };
 
   const generateManualDoNumber = (sequence) => {

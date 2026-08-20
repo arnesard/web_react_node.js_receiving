@@ -58,6 +58,20 @@
 // verifikasi scan rak yang udah ada.
 const { poolEdp } = require("../../config/database");
 
+// Filter kategori OK/OE itu harusnya nyangkup SUB-kategorinya juga, mis.
+// kategori mentah dari probcode bisa keluar sebagai "OE-SP" (bukan cuma
+// "OE" polos) — kalau dicocokin exact-match ("OE-SP" === "OE" → false),
+// item itu ke-filter keluar padahal sebenernya termasuk OE. Makanya semua
+// pengecekan filter kategori pakai prefix-match ("startsWith"), bukan
+// exact-match, biar "OE-SP"/"OK-SP"/varian lain tetep kehitung masuk
+// kategori induknya (OE/OK).
+function kategoriMatchesFilter(kategori, filter) {
+  if (!filter) return true;
+  return String(kategori || "")
+    .toUpperCase()
+    .startsWith(filter.toUpperCase());
+}
+
 class ControlStockModel {
   // Ambil deskripsi item dari bcmcfgv1.itemcatalog. Balikin Map<item, descr>.
   //
@@ -216,7 +230,9 @@ class ControlStockModel {
     });
 
     if (kategoriFilter) {
-      racks = racks.filter((r) => r.kategoriList.includes(kategoriFilter));
+      racks = racks.filter((r) =>
+        r.kategoriList.some((k) => kategoriMatchesFilter(k, kategoriFilter)),
+      );
     }
     racks.sort((a, b) => (a.curweek || "").localeCompare(b.curweek || ""));
 
@@ -272,7 +288,9 @@ class ControlStockModel {
     // Sama kayak filter kategori di level lokasi — kalau ada filter
     // OK/OE, cuma baris yang kategorinya cocok yang dihitung.
     if (kategoriFilter) {
-      detail = detail.filter((d) => d.kategori === kategoriFilter);
+      detail = detail.filter((d) =>
+        kategoriMatchesFilter(d.kategori, kategoriFilter),
+      );
     }
 
     detail.sort((a, b) => (a.curweek || "").localeCompare(b.curweek || ""));
@@ -621,8 +639,10 @@ class ControlStockModel {
         );
         let dominantKategori = "KOSONG";
         if (semuaKategori.size > 1) dominantKategori = "MIXED";
-        else if (semuaKategori.has("OE")) dominantKategori = "OE";
-        else if (semuaKategori.has("OK")) dominantKategori = "OK";
+        else if ([...semuaKategori].some((k) => k.startsWith("OE")))
+          dominantKategori = "OE";
+        else if ([...semuaKategori].some((k) => k.startsWith("OK")))
+          dominantKategori = "OK";
 
         // whsweek lokasi = curweek PALING TUA di antara SEMUA rak gabungan
         // yang ngisi lot ini (dihitung dari semua rak, sebelum difilter
@@ -644,7 +664,11 @@ class ControlStockModel {
 
         // Terapkan filter (kalau ada) — level rak, bukan level lokasi.
         const racks = filterKategori
-          ? allRacks.filter((x) => x.kategoriList.includes(filterKategori))
+          ? allRacks.filter((x) =>
+              x.kategoriList.some((k) =>
+                kategoriMatchesFilter(k, filterKategori),
+              ),
+            )
           : allRacks;
 
         const qtyLokasi = racks.reduce((s, x) => s + (x.qty || 0), 0);
