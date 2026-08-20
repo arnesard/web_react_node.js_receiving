@@ -20,6 +20,7 @@ import KarawangBarcode from "./pages/stok-opname-karawang/BarcodePage";
 import KarawangCrossDocking from "./pages/stok-opname-karawang/CrossDockingPage";
 import KarawangFifo from "./pages/stok-opname-karawang/FifoPage";
 import KarawangTransferPlan from "./pages/stok-opname-karawang/TransferPlanPage";
+import KarawangTireTubePairing from "./pages/stok-opname-karawang/TireTubePairingPage";
 import "./App.css";
 
 const currentUser = { name: "Admin GT" };
@@ -51,6 +52,10 @@ function LayoutRoutes() {
         <Route
           path="/karawang/transfer-plan"
           element={<KarawangTransferPlan />}
+        />
+        <Route
+          path="/karawang/tire-tube-pairing"
+          element={<KarawangTireTubePairing />}
         />
       </Routes>
     </AppLayout>

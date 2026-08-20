@@ -42,6 +42,27 @@ export default function TransferPlanPage() {
 
   const [summaryItemReq, setSummaryItemReq] = useState([]);
 
+  // ============ MASTER PASANGAN TIRE <-> TUBE ============
+  // Dipakai buat auto-nambahin tube pasangan tiap kali tire (tubetype)
+  // masuk ke trip (manual maupun auto-generate) — qty selalu 1:1.
+  const [tireTubePairs, setTireTubePairs] = useState([]);
+  const tireTubePairMap = useMemo(() => {
+    const map = new Map();
+    tireTubePairs.forEach((p) => {
+      map.set(String(p.tire_code).trim().toUpperCase(), p);
+    });
+    return map;
+  }, [tireTubePairs]);
+
+  const loadTireTubePairs = async () => {
+    try {
+      const res = await api.get("/stok-opname-karawang/tire-tube-pairing");
+      setTireTubePairs(res.data?.data || []);
+    } catch (err) {
+      console.error("Gagal mengambil master pasangan Tire-Tube:", err);
+    }
+  };
+
   // ============ PREVIEW ITEM REQUEST + STOK TANGERANG/KARAWANG ============
   const [previewItems, setPreviewItems] = useState([]);
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -103,7 +124,33 @@ export default function TransferPlanPage() {
   useEffect(() => {
     loadSummaryItemReq();
     loadPreview();
+    loadTireTubePairs();
   }, []);
+
+  // Bikin 1 baris item "tube pasangan" dari data master pairing, qty
+  // ngikutin qty tire-nya (1:1). Ditandain pairedTire biar sinkron pas
+  // qty tire diubah / tire dihapus dari trip (lihat updateManualTripItemQty
+  // & removeItemFromManualTrip).
+  // NOTE volume SENGAJA di-nol-in: tube udah nempel DI DALAM tire, jadi
+  // gak nambah kubikasi/kapasitas truk. Beratnya TETEP dihitung normal,
+  // biar keitung pas cetak RMB (kolom "KG").
+  const buildPairedTubeLine = (tireCode, qty) => {
+    const pair = tireTubePairMap.get(String(tireCode).trim().toUpperCase());
+    if (!pair) return null;
+
+    const berat = Number(pair.tube_berat || 0);
+
+    return {
+      item: pair.tube_code,
+      deskripsi: pair.tube_description || "-",
+      qty,
+      volume: 0,
+      total_volume: 0,
+      berat,
+      total_berat: Number((qty * berat).toFixed(2)),
+      pairedTire: String(tireCode).trim().toUpperCase(),
+    };
+  };
 
   const handleDownloadTemplate = () => {
     const wb = XLSX.utils.book_new();
@@ -380,6 +427,32 @@ export default function TransferPlanPage() {
         bestTrip._volume = Number((bestTrip._volume + itemVolume).toFixed(3));
       });
 
+      // Auto-add tube pasangan tiap tire yang barusan masuk trip (qty 1:1,
+      // liat master di halaman "Master Tire-Tube"). Ditambahin SETELAH
+      // bin-packing tire selesai, jadi gak ngaruh ke keputusan best-fit
+      // tire-nya, tapi tetep keitung di total_volume trip yang ditampilin.
+      trips.forEach((t) => {
+        const tireLines = [...t.items];
+        tireLines.forEach((tireLine) => {
+          const tubeLine = buildPairedTubeLine(tireLine.item, tireLine.qty);
+          if (!tubeLine) return;
+
+          const idx = t.items.findIndex((i) => i.item === tubeLine.item);
+          if (idx >= 0) {
+            const mergedQty = Number(t.items[idx].qty) + tubeLine.qty;
+            t.items[idx] = {
+              ...t.items[idx],
+              qty: mergedQty,
+              total_volume: Number((mergedQty * tubeLine.volume).toFixed(3)),
+              total_berat: Number((mergedQty * tubeLine.berat).toFixed(2)),
+            };
+          } else {
+            t.items.push(tubeLine);
+          }
+          t._volume = Number((t._volume + tubeLine.total_volume).toFixed(3));
+        });
+      });
+
       const newTrips = trips.map(({ _volume, ...t }) => t);
 
       setManualTrips((prev) => [...prev, ...newTrips]);
@@ -405,27 +478,41 @@ export default function TransferPlanPage() {
   // Ubah qty 1 baris item di dalam trip manual (bisa nambah/ngurangin),
   // total_volume & total_berat ikut dihitung ulang otomatis.
   const updateManualTripItemQty = (tripId, itemCode, rawQty) => {
+    const qty = Math.max(0, Number(rawQty) || 0);
+    const normalizedTireCode = String(itemCode).trim().toUpperCase();
+
     setManualTrips((prev) =>
       prev.map((t) => {
         if (t.id !== tripId) return t;
 
-        return {
-          ...t,
-          items: t.items.map((i) => {
-            if (i.item !== itemCode) return i;
+        const items = t.items.map((i) => {
+          const volume = Number(i.volume || 0);
+          const berat = Number(i.berat || 0);
 
-            const qty = Math.max(0, Number(rawQty) || 0);
-            const volume = Number(i.volume || 0);
-            const berat = Number(i.berat || 0);
-
+          if (i.item === itemCode) {
             return {
               ...i,
               qty,
               total_volume: Number((qty * volume).toFixed(3)),
               total_berat: Number((qty * berat).toFixed(2)),
             };
-          }),
-        };
+          }
+
+          // Tube pasangan yang auto-nempel ke tire ini ikut disamain
+          // qty-nya (rasio selalu 1:1).
+          if (i.pairedTire === normalizedTireCode) {
+            return {
+              ...i,
+              qty,
+              total_volume: Number((qty * volume).toFixed(3)),
+              total_berat: Number((qty * berat).toFixed(2)),
+            };
+          }
+
+          return i;
+        });
+
+        return { ...t, items };
       }),
     );
   };
@@ -464,7 +551,17 @@ export default function TransferPlanPage() {
     const trip = manualTrips.find((t) => t.id === tripId);
     const alreadyInTrip = trip?.items.some((i) => i.item === itemCode);
 
-    if (trip && trip.items.length >= 4 && !alreadyInTrip) {
+    // Tube pasangan (kalau ada) bakal ikut nambah baris juga — hitung dulu
+    // biar cek "trip penuh" (maks 4 item/trip) akurat buat KEDUANYA.
+    const pairedTubeLine = buildPairedTubeLine(itemCode, qty);
+    const tubeAlreadyInTrip =
+      pairedTubeLine &&
+      trip?.items.some((i) => i.item === pairedTubeLine.item);
+    const newLinesCount =
+      (alreadyInTrip ? 0 : 1) +
+      (pairedTubeLine && !tubeAlreadyInTrip ? 1 : 0);
+
+    if (trip && trip.items.length + newLinesCount > 4) {
       Swal.fire(
         "Trip Udah Penuh",
         "Maksimal 4 item per trip. Hapus salah satu item dulu atau pilih trip lain.",
@@ -482,37 +579,52 @@ export default function TransferPlanPage() {
       prev.map((t) => {
         if (t.id !== tripId) return t;
 
-        const idx = t.items.findIndex((i) => i.item === itemCode);
+        let items = [...t.items];
 
+        const idx = items.findIndex((i) => i.item === itemCode);
         if (idx >= 0) {
-          const mergedQty = Number(t.items[idx].qty) + qty;
-          const items = [...t.items];
-
+          const mergedQty = Number(items[idx].qty) + qty;
           items[idx] = {
             ...items[idx],
             qty: mergedQty,
             total_volume: Number((mergedQty * volume).toFixed(3)),
             total_berat: Number((mergedQty * berat).toFixed(2)),
           };
-
-          return { ...t, items };
+        } else {
+          items.push({
+            item: itemCode,
+            deskripsi,
+            qty,
+            volume,
+            total_volume: Number((qty * volume).toFixed(3)),
+            berat,
+            total_berat: Number((qty * berat).toFixed(2)),
+          });
         }
 
-        return {
-          ...t,
-          items: [
-            ...t.items,
-            {
-              item: itemCode,
-              deskripsi,
-              qty,
-              volume,
-              total_volume: Number((qty * volume).toFixed(3)),
-              berat,
-              total_berat: Number((qty * berat).toFixed(2)),
-            },
-          ],
-        };
+        // Auto-add / sync tube pasangan (qty 1:1 sama tire di atas).
+        if (pairedTubeLine) {
+          const tubeIdx = items.findIndex(
+            (i) => i.item === pairedTubeLine.item,
+          );
+          if (tubeIdx >= 0) {
+            const mergedQty = Number(items[tubeIdx].qty) + qty;
+            items[tubeIdx] = {
+              ...items[tubeIdx],
+              qty: mergedQty,
+              total_volume: Number(
+                (mergedQty * pairedTubeLine.volume).toFixed(3),
+              ),
+              total_berat: Number(
+                (mergedQty * pairedTubeLine.berat).toFixed(2),
+              ),
+            };
+          } else {
+            items.push(pairedTubeLine);
+          }
+        }
+
+        return { ...t, items };
       }),
     );
 
@@ -571,10 +683,20 @@ export default function TransferPlanPage() {
   };
 
   const removeItemFromManualTrip = (tripId, itemCode) => {
+    const normalizedTireCode = String(itemCode).trim().toUpperCase();
+
     setManualTrips((prev) =>
       prev.map((t) =>
         t.id === tripId
-          ? { ...t, items: t.items.filter((i) => i.item !== itemCode) }
+          ? {
+              ...t,
+              // Hapus item-nya sendiri, DAN tube pasangan yang auto-nempel
+              // ke item ini (kalau itemCode yang dihapus emang tire yang
+              // punya pasangan) — biar gak nyisain tube nyangkut sendirian.
+              items: t.items.filter(
+                (i) => i.item !== itemCode && i.pairedTire !== normalizedTireCode,
+              ),
+            }
           : t,
       ),
     );

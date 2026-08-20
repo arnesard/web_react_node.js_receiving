@@ -6,6 +6,7 @@ const KarawangController = require("../../controllers/stok-opname-karawang/Karaw
 const CrossDockingController = require("../../controllers/stok-opname-karawang/CrossDockingController");
 const FifoController = require("../../controllers/stok-opname-karawang/FifoController");
 const TransferPlanController = require("../../controllers/stok-opname-karawang/TransferPlanController");
+const KarawangTireTubePairingController = require("../../controllers/stok-opname-karawang/KarawangTireTubePairingController");
 const uploadItemReq = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -79,4 +80,32 @@ router.get("/item-req/summary", TransferPlanController.itemRequestSummary);
 // Histori Trip Plan — simpan hasil trip plan + filter tanggal
 router.post("/trip-plan/save", TransferPlanController.saveTripPlan);
 router.get("/trip-plan/history", TransferPlanController.tripPlanHistory);
+
+// ── Master pasangan Tire (tubetype) <-> Tube ──
+router.get(
+  "/tire-tube-pairing",
+  KarawangTireTubePairingController.list,
+);
+router.get(
+  "/tire-tube-pairing/lookup",
+  KarawangTireTubePairingController.lookupByTireCodes,
+);
+router.post(
+  "/tire-tube-pairing/upload",
+  uploadItemReq.single("file"),
+  KarawangTireTubePairingController.upload,
+);
+router.post(
+  "/tire-tube-pairing",
+  KarawangTireTubePairingController.create,
+);
+router.put(
+  "/tire-tube-pairing/:id",
+  KarawangTireTubePairingController.update,
+);
+router.delete(
+  "/tire-tube-pairing/:id",
+  KarawangTireTubePairingController.remove,
+);
+
 module.exports = router;

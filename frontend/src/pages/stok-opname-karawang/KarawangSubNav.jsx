@@ -7,6 +7,7 @@ import {
   Barcode,
   Boxes,
   ArrowLeftRight,
+  Link2,
 } from "lucide-react";
 
 export default function KarawangSubNav() {
@@ -28,6 +29,11 @@ export default function KarawangSubNav() {
       to: "/karawang/transfer-plan",
       label: "Transfer Plan",
       icon: <ArrowLeftRight size={15} />,
+    },
+    {
+      to: "/karawang/tire-tube-pairing",
+      label: "Master Tire-Tube",
+      icon: <Link2 size={15} />,
     },
   ];
   return (
