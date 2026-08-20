@@ -4,13 +4,21 @@
 // import/upsert selalu "replace" pasangan lama kalau tire_code sama.
 const { poolUtama } = require("../../config/database");
 
-const norm = (v) => String(v || "").trim().toUpperCase();
+const norm = (v) =>
+  String(v || "")
+    .trim()
+    .toUpperCase();
 
 class KarawangTireTubePairingModel {
   // JOIN ke master_item buat narik volume/berat TUBE-nya sekalian — tube
   // gak pernah masuk Item Request (yang diupload cuma TIRE), jadi
   // volume/berat-nya gak ada di previewItems frontend; kudu nebeng dari
   // sini biar pas tube di-auto-add ke trip, kubikasinya kehitung bener.
+  // NOTE COLLATE: tabel tire_tube_pairing (baru, default MySQL 8 ->
+  // utf8mb4_0900_ai_ci) beda collation sama master_item (lama ->
+  // utf8mb4_general_ci). Tanpa di-samain manual, MySQL nolak JOIN-nya
+  // (ER_CANT_AGGREGATE_2COLLATIONS). Paksa COLLATE di kondisi ON biar aman
+  // tanpa perlu ubah struktur/collation tabel manapun.
   static async list() {
     const [rows] = await poolUtama.query(`
       SELECT p.id, p.tire_code, p.tire_description, p.tube_code,
@@ -19,7 +27,7 @@ class KarawangTireTubePairingModel {
              COALESCE(m.berat, 0) AS tube_berat
       FROM stok_opname_karawang_tire_tube_pairing p
       LEFT JOIN stok_opname_karawang_master_item m
-        ON p.tube_code = m.code_no
+        ON p.tube_code COLLATE utf8mb4_general_ci = m.code_no COLLATE utf8mb4_general_ci
       ORDER BY p.tube_code, p.tire_code
     `);
     return rows;
@@ -36,7 +44,7 @@ class KarawangTireTubePairingModel {
               COALESCE(m.berat, 0) AS tube_berat
        FROM stok_opname_karawang_tire_tube_pairing p
        LEFT JOIN stok_opname_karawang_master_item m
-         ON p.tube_code = m.code_no
+         ON p.tube_code COLLATE utf8mb4_general_ci = m.code_no COLLATE utf8mb4_general_ci
        WHERE p.tire_code = ?
        LIMIT 1`,
       [norm(tireCode)],
@@ -58,14 +66,20 @@ class KarawangTireTubePairingModel {
               COALESCE(m.berat, 0) AS tube_berat
        FROM stok_opname_karawang_tire_tube_pairing p
        LEFT JOIN stok_opname_karawang_master_item m
-         ON p.tube_code = m.code_no
+         ON p.tube_code COLLATE utf8mb4_general_ci = m.code_no COLLATE utf8mb4_general_ci
        WHERE p.tire_code IN (?)`,
       [codes],
     );
     return rows;
   }
 
-  static async create({ tire_code, tire_description, tube_code, tube_description, customer }) {
+  static async create({
+    tire_code,
+    tire_description,
+    tube_code,
+    tube_description,
+    customer,
+  }) {
     if (!tire_code || !tube_code) {
       throw new Error("Kode Tire dan Kode Tube wajib diisi.");
     }
@@ -91,7 +105,10 @@ class KarawangTireTubePairingModel {
     return result.insertId;
   }
 
-  static async update(id, { tire_code, tire_description, tube_code, tube_description, customer }) {
+  static async update(
+    id,
+    { tire_code, tire_description, tube_code, tube_description, customer },
+  ) {
     if (!tire_code || !tube_code) {
       throw new Error("Kode Tire dan Kode Tube wajib diisi.");
     }
@@ -120,7 +137,9 @@ class KarawangTireTubePairingModel {
   }
 
   static async removeAll() {
-    await poolUtama.query(`TRUNCATE TABLE stok_opname_karawang_tire_tube_pairing`);
+    await poolUtama.query(
+      `TRUNCATE TABLE stok_opname_karawang_tire_tube_pairing`,
+    );
   }
 
   // Import dari Excel (dipanggil KarawangTireTubePairingController.upload).

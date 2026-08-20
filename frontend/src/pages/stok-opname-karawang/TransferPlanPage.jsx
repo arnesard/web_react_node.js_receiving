@@ -24,9 +24,11 @@ import {
   RefreshCw,
   Printer,
   Wand2,
+  Link2,
 } from "lucide-react";
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
+import TireTubePairingModal from "./TireTubePairingModal";
 import { karawangStyles } from "./karawangStyles";
 import * as XLSX from "xlsx-js-style";
 
@@ -36,6 +38,10 @@ export default function TransferPlanPage() {
   const [uploadingFile, setUploadingFile] = useState(false);
 
   const [savingTripPlan, setSavingTripPlan] = useState(false);
+  // Modal "Kelola Master Tire-Tube" — CRUD + import Excel master pasangan
+  // Tire<->Tube, dibuka dari tombol di header Transfer Plan (menu/halaman
+  // terpisah "Master Tire-Tube" sudah dihapus).
+  const [showTireTubeModal, setShowTireTubeModal] = useState(false);
   // Tabel "Preview Item Request & Stok" disembunyikan di halaman utama,
   // baru muncul setelah tombol "Rencana Transfer" diklik.
   const [showPreviewTable, setShowPreviewTable] = useState(false);
@@ -1095,6 +1101,28 @@ export default function TransferPlanPage() {
           </div>
 
           <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => setShowTireTubeModal(true)}
+              title="Kelola Master Pasangan Tire-Tube"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                border: "1px solid #cbd5e1",
+                background: "#fff",
+                color: "#334155",
+                borderRadius: 8,
+                padding: "9px 16px",
+                cursor: "pointer",
+                fontSize: 12.5,
+                fontWeight: 700,
+              }}
+            >
+              <Link2 size={15} />
+              Kelola Master Tire-Tube
+            </button>
+
             <button
               type="button"
               onClick={() => {
@@ -3122,6 +3150,13 @@ export default function TransferPlanPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {showTireTubeModal && (
+        <TireTubePairingModal
+          onClose={() => setShowTireTubeModal(false)}
+          onChanged={loadTireTubePairs}
+        />
       )}
     </div>
   );
