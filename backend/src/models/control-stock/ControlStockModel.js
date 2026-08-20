@@ -146,9 +146,19 @@ class ControlStockModel {
   // ribuan rak fisik), jadi query yang gak perlu narik data item lain
   // penting biar gak nambah beban ke DB EDP yang udah dipanggil beberapa
   // kali di alur ini.
-  static async _getRakBelumMasukLot(rackcodes, itemCode, kategoriFilter = null) {
+  static async _getRakBelumMasukLot(
+    rackcodes,
+    itemCode,
+    kategoriFilter = null,
+  ) {
     if (!rackcodes.length) {
-      return { ada: false, jumlah_rak: 0, qty_total: 0, kategori_breakdown: [], racks: [] };
+      return {
+        ada: false,
+        jumlah_rak: 0,
+        qty_total: 0,
+        kategori_breakdown: [],
+        racks: [],
+      };
     }
     const kode = (itemCode || "").trim();
 
@@ -196,7 +206,13 @@ class ControlStockModel {
         if (b.qty !== a.qty) return b.qty - a.qty;
         return a.curweek.localeCompare(b.curweek);
       })[0].curweek;
-      return { rackcode: rc, qty, kategori: kategoriList.join(", "), kategoriList, curweek };
+      return {
+        rackcode: rc,
+        qty,
+        kategori: kategoriList.join(", "),
+        kategoriList,
+        curweek,
+      };
     });
 
     if (kategoriFilter) {
@@ -378,7 +394,7 @@ class ControlStockModel {
     // query IN (?) OR (?) OR (?) OR (?) ke fgloc di bawah maupun ke
     // hitungan "belum masuk lot" nanti.
     const isRackcodeVirtual = (rc) =>
-      rc === "CUSTOMER" || /^~?T-\d+$/i.test(rc);
+      rc === "CUSTOMER" || rc === "COLLIE" || /^~?T-\d+$/i.test(rc);
     const rackcodesFisik = rackHits
       .map((r) => (r.rackcode || "").trim())
       .filter((rc) => rc && !isRackcodeVirtual(rc));
@@ -468,12 +484,13 @@ class ControlStockModel {
       });
     });
 
-    const [rackMap, descrMap, belumMasukLot, rakBelumMasukLot] = await Promise.all([
-      this._getRackContents([...allRackcodes]),
-      this._getDescriptions([kode]),
-      this._getBelumMasukLot(kode, filterKategori),
-      this._getRakBelumMasukLot(rackcodesBelumMasukLot, kode, filterKategori),
-    ]);
+    const [rackMap, descrMap, belumMasukLot, rakBelumMasukLot] =
+      await Promise.all([
+        this._getRackContents([...allRackcodes]),
+        this._getDescriptions([kode]),
+        this._getBelumMasukLot(kode, filterKategori),
+        this._getRakBelumMasukLot(rackcodesBelumMasukLot, kode, filterKategori),
+      ]);
 
     const deskripsi = descrMap.get(kode) || "-";
 
@@ -553,7 +570,6 @@ class ControlStockModel {
         allRacks,
       };
     });
-
 
     // Tahap 2: gabung berdasarkan loccol (lot) — lot yang sama disatuin
     // jadi 1 lokasi, rak & minggunya digabung semua di 1 tempat.
