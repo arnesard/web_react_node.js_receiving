@@ -8,6 +8,8 @@
 //    Schedule OEM dari bpw_dept_db.sch_oem (lihat KarawangItemRequestModel
 //    getTireTripItems di backend).
 import { useState, useEffect, useMemo } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { QRCodeSVG } from "qrcode.react";
 import Swal from "sweetalert2";
 import {
   Loader2,
@@ -913,6 +915,19 @@ export default function TransferPlanPage() {
         totalM3 += volume;
         totalKg += berat;
 
+        // QR kolom SHIPP.INS isinya kode item (bukan barcode fisik) —
+        // di-render sinkron ke SVG string, gak butuh internet/API luar.
+        const qrSvg = item.item
+          ? renderToStaticMarkup(
+              <QRCodeSVG
+                value={item.item}
+                size={34}
+                level="M"
+                marginSize={0}
+              />,
+            )
+          : "";
+
         return `
       <tr>
         <td class="c">${idx + 1}</td>
@@ -928,7 +943,7 @@ export default function TransferPlanPage() {
           minimumFractionDigits: 3,
           maximumFractionDigits: 3,
         })}</td>
-        <td></td>
+        <td class="c qr-cell">${qrSvg}</td>
         <td></td>
         <td class="c"></td>
       </tr>`;
@@ -958,10 +973,17 @@ export default function TransferPlanPage() {
   table.items th { background: #374151; color: #fff; text-align: center; }
   table.items td.c { text-align: center; }
   table.items td.r { text-align: right; }
-  .totals { display: flex; justify-content: flex-end; gap: 30px; margin-top: 10px; font-weight: 700; font-size: 11px; }
-  .sign { display: flex; justify-content: space-between; margin-top: 60px; text-align: center; font-size: 11px; }
+  table.items td.qr-cell { padding: 2px 4px; line-height: 0; }
+  table.items td.qr-cell svg { width: 30px; height: 30px; display: block; margin: 0 auto; }
+  .totals-row { display: flex; justify-content: flex-end; gap: 30px; margin-top: 10px; font-weight: 700; font-size: 11px; }
+  .sign-header { display: flex; justify-content: space-between; margin-top: 40px; text-align: center; font-size: 11px; font-weight: 700; }
+  .sign-header > div { width: 30%; }
+  .sign-header > div:last-child { width: 60%; }
+  .sign { display: flex; justify-content: space-between; margin-top: 4px; text-align: center; font-size: 11px; }
   .sign > div { width: 30%; }
   .sign .line { margin-top: 60px; border-top: 1px solid #000; padding-top: 4px; }
+  .catatan { font-size: 11px; margin-top: 40px; }
+  .catatan .line2 { margin-top: 4px; border-top: 1px solid #94a3b8; width: 260px; padding-top: 6px; }
   @media print {
     .no-print { display: none; }
   }
@@ -1022,7 +1044,7 @@ export default function TransferPlanPage() {
     </tbody>
   </table>
 
-  <div class="totals">
+  <div class="totals-row">
     <div>TOTAL PCS : ${totalQty.toLocaleString("id-ID")}</div>
     <div>TOTAL M3 : ${totalM3.toLocaleString("id-ID", {
       minimumFractionDigits: 2,
@@ -1034,6 +1056,10 @@ export default function TransferPlanPage() {
     })}</div>
   </div>
 
+  <div class="sign-header">
+    <div></div>
+    <div>PELAKSANAAN MUAT BARANG</div>
+  </div>
   <div class="sign">
     <div>
       <div>MENGETAHUI,</div>
@@ -1047,6 +1073,11 @@ export default function TransferPlanPage() {
       <div>MENERIMA,</div>
       <div class="line">(&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;)</div>
     </div>
+  </div>
+
+  <div class="catatan">
+    <div>Catatan :</div>
+    <div class="line2">&nbsp;</div>
   </div>
 </body>
 </html>`;
