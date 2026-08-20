@@ -625,11 +625,9 @@ export default function TransferPlanPage() {
     // biar cek "trip penuh" (maks 4 item/trip) akurat buat KEDUANYA.
     const pairedTubeLine = buildPairedTubeLine(itemCode, qty);
     const tubeAlreadyInTrip =
-      pairedTubeLine &&
-      trip?.items.some((i) => i.item === pairedTubeLine.item);
+      pairedTubeLine && trip?.items.some((i) => i.item === pairedTubeLine.item);
     const newLinesCount =
-      (alreadyInTrip ? 0 : 1) +
-      (pairedTubeLine && !tubeAlreadyInTrip ? 1 : 0);
+      (alreadyInTrip ? 0 : 1) + (pairedTubeLine && !tubeAlreadyInTrip ? 1 : 0);
 
     if (trip && trip.items.length + newLinesCount > 4) {
       Swal.fire(
@@ -734,9 +732,7 @@ export default function TransferPlanPage() {
             items.push({
               ...pairedTubeLine,
               qty: finalQty,
-              total_berat: Number(
-                (finalQty * pairedTubeLine.berat).toFixed(2),
-              ),
+              total_berat: Number((finalQty * pairedTubeLine.berat).toFixed(2)),
             });
           }
         }
@@ -819,7 +815,8 @@ export default function TransferPlanPage() {
               // ke item ini (kalau itemCode yang dihapus emang tire yang
               // punya pasangan) — biar gak nyisain tube nyangkut sendirian.
               items: t.items.filter(
-                (i) => i.item !== itemCode && i.pairedTire !== normalizedTireCode,
+                (i) =>
+                  i.item !== itemCode && i.pairedTire !== normalizedTireCode,
               ),
             }
           : t,
@@ -944,7 +941,7 @@ export default function TransferPlanPage() {
 <meta charset="utf-8" />
 <title>RMB - ${trip.no_trip || ""}</title>
 <style>
-  @page { size: A4 landscape; margin: 12mm; }
+  @page { size: A4 portrait; margin: 12mm; }
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; color: #1e293b; font-size: 11px; margin: 0; }
   .top { display: flex; justify-content: space-between; align-items: flex-start; }
@@ -955,9 +952,9 @@ export default function TransferPlanPage() {
   .info { display: flex; justify-content: space-between; gap: 40px; margin-bottom: 16px; }
   .info table { border-collapse: collapse; }
   .info td { padding: 2px 6px; font-size: 11px; vertical-align: top; }
-  .info td.label { font-weight: 700; white-space: nowrap; }
+  .info td.label { font-weight: 200; white-space: nowrap; }
   table.items { width: 100%; border-collapse: collapse; margin-top: 6px; }
-  table.items th, table.items td { border: 1px solid #64748b; padding: 4px 6px; font-size: 10.5px; }
+  table.items th, table.items td {padding: 4px 6px; font-size: 9px; }
   table.items th { background: #374151; color: #fff; text-align: center; }
   table.items td.c { text-align: center; }
   table.items td.r { text-align: right; }
@@ -991,7 +988,7 @@ export default function TransferPlanPage() {
       <tr><td class="label">KOTA</td><td>:</td><td>Jawa Barat</td></tr>
       <tr><td class="label">NO KIRIM</td><td>:</td><td>${trip.no_trip || ""}</td></tr>
       <tr><td class="label">TGL KIRIM</td><td>:</td><td>${today}</td></tr>
-      <tr><td class="label">NAMA TRIP</td><td>:</td><td>${trip.no_trip || ""}</td></tr>
+      <tr><td class="label">NAMA TRIP</td><td>:</td><td></td></tr>
     </table>
     <table>
       <tr><td class="label">PA/EMKL</td><td>:</td><td></td></tr>
@@ -1005,19 +1002,19 @@ export default function TransferPlanPage() {
   <table class="items">
     <thead>
       <tr>
-        <th>NO.</th>
-        <th>KODE ITEM</th>
-        <th>DESKRIPSI</th>
-        <th>KIRIM</th>
-        <th>EXTRA</th>
-        <th>S.INV</th>
-        <th>STOK</th>
-        <th>AKTUAL</th>
-        <th>UOM</th>
-        <th>M3</th>
-        <th>SHIPP.INS.</th>
-        <th>PACK.INS.</th>
-        <th>NO SO.</th>
+        <th style="width: 3%;">NO.</th>
+        <th style="width: 11%;">KODE ITEM</th>
+        <th style="width: 29%;">DESKRIPSI</th>
+        <th style="width: 4%;">KIRIM</th>
+        <th style="width: 4%;">EXTRA</th>
+        <th style="width: 4%;">S.INV</th>
+        <th style="width: 4%;">STOK</th>
+        <th style="width: 4%;">AKTUAL</th>
+        <th style="width: 4%;">UOM</th>
+        <th style="width: 4%;">M3</th>
+        <th style="width: 7%;">SHIPP.INS.</th>
+        <th style="width: 7%;">PACK.INS.</th>
+        <th style="width: 15%;">NO SO.</th>
       </tr>
     </thead>
     <tbody>
