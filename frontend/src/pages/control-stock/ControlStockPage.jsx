@@ -38,6 +38,11 @@ export default function ControlStock() {
   const [expandedRows, setExpandedRows] = useState(() => new Set());
   // Toggle detail breakdown section "Belum Masuk Lot" (rackcode "~").
   const [showBelumMasukLot, setShowBelumMasukLot] = useState(false);
+  // Baris (kategori+week) di section "Belum Masuk Rak" yang barcode-nya
+  // lagi dibuka (dropdown per baris, gak semua kebuka bareng).
+  const [expandedBmlBarcodes, setExpandedBmlBarcodes] = useState(
+    () => new Set(),
+  );
   // Toggle detail breakdown section "Rak Belum Masuk Lot" (rackcode
   // fisik, udah ke-scan, tapi belum ke-assign ke fgloc/loccode manapun).
   const [showRakBelumMasukLot, setShowRakBelumMasukLot] = useState(false);
@@ -46,6 +51,15 @@ export default function ControlStock() {
 
   const toggleExpand = (rowKey) => {
     setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowKey)) next.delete(rowKey);
+      else next.add(rowKey);
+      return next;
+    });
+  };
+
+  const toggleBmlBarcodes = (rowKey) => {
+    setExpandedBmlBarcodes((prev) => {
       const next = new Set(prev);
       if (next.has(rowKey)) next.delete(rowKey);
       else next.add(rowKey);
@@ -98,6 +112,7 @@ export default function ControlStock() {
       setExpandedRows(new Set());
       setShowBelumMasukLot(false);
       setShowRakBelumMasukLot(false);
+      setExpandedBmlBarcodes(new Set());
     } catch (err) {
       setResult(null);
       Swal.fire("Gagal", err.response?.data?.message || err.message, "error");
@@ -266,18 +281,79 @@ export default function ControlStock() {
 
               {showBelumMasukLot && (
                 <div className="cs-rack-detail-list cs-bml-detail-list">
-                  {result.belum_masuk_lot.detail.map((d, i) => (
-                    <div
-                      key={i}
-                      className="cs-rack-detail-row cs-rack-chip-warn"
-                    >
-                      <span className="cs-week-badge">
-                        {formatWhsWeek(d.curweek)}
-                      </span>
-                      <span className="cs-rack-detail-kat">{d.kategori}</span>
-                      <span className="cs-rack-detail-qty">qty {d.qty}</span>
-                    </div>
-                  ))}
+                  {result.belum_masuk_lot.detail.map((d, i) => {
+                    const rowKey = `${d.kategori}|${d.curweek}|${i}`;
+                    const isOpen = expandedBmlBarcodes.has(rowKey);
+                    const hasBarcodes = d.barcodes && d.barcodes.length > 0;
+
+                    return (
+                      <div
+                        key={i}
+                        className="cs-rack-detail-row cs-rack-chip-warn"
+                        style={{
+                          flexDirection: "column",
+                          alignItems: "stretch",
+                          gap: 4,
+                          cursor: hasBarcodes ? "pointer" : "default",
+                        }}
+                        onClick={() => hasBarcodes && toggleBmlBarcodes(rowKey)}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                          }}
+                        >
+                          {hasBarcodes &&
+                            (isOpen ? (
+                              <ChevronDown size={14} />
+                            ) : (
+                              <ChevronRight size={14} />
+                            ))}
+                          <span className="cs-week-badge">
+                            {formatWhsWeek(d.curweek)}
+                          </span>
+                          <span className="cs-rack-detail-kat">
+                            {d.kategori}
+                          </span>
+                          <span className="cs-rack-detail-qty">
+                            qty {d.qty}
+                          </span>
+                        </div>
+
+                        {isOpen && hasBarcodes && (
+                          <div
+                            style={{
+                              display: "flex",
+                              flexWrap: "wrap",
+                              gap: 4,
+                              paddingLeft: 22,
+                            }}
+                          >
+                            {d.barcodes.map((bc, j) => (
+                              <span
+                                key={j}
+                                style={{
+                                  fontFamily:
+                                    "'JetBrains Mono', ui-monospace, monospace",
+                                  fontSize: 10.5,
+                                  fontWeight: 600,
+                                  color: "#92400e",
+                                  background: "#fef3c7",
+                                  border: "1px solid #fde68a",
+                                  borderRadius: 4,
+                                  padding: "2px 6px",
+                                }}
+                              >
+                                {bc}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

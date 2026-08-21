@@ -234,6 +234,10 @@ export const karawangStyles = `
     vertical-align: top; }
   .ko-data-table tr:last-child td { border-bottom: none; }
   .ko-data-table tbody tr:hover { background: #f8fafc; }
+  /* Versi compact khusus tabel item di dalam card Trip Manual */
+  .ko-trip-table { min-width: 560px; font-size: 9.5px; }
+  .ko-trip-table th { padding: 4px 6px; font-size: 8.5px; }
+  .ko-trip-table td { padding: 3px 6px; }
   .ko-variance-row-ok td { background: #f0fdf4; color: #15803d; }
   .ko-variance-row-diff td { background: #fef2f2; }
   .ko-variance-row-diff .ko-mono:last-child { color: #b91c1c; font-weight: 700; }

@@ -897,13 +897,39 @@ export default function TransferPlanPage() {
     );
   };
 
+  // Hitung kode Week berjalan format "YYWW" (2 digit tahun + 2 digit
+  // nomor minggu ISO), dipakai buat QR "MAX WEEK" di RMB — otomatis
+  // ngikutin minggu berjalan pas dicetak, gak perlu diubah manual.
+  const getCurrentWeekCode = () => {
+    const now = new Date();
+    const d = new Date(
+      Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
+    );
+    // Geser ke hari Kamis di minggu yang sama (aturan ISO week)
+    d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+    const yy = String(d.getUTCFullYear()).slice(-2);
+    const ww = String(weekNo).padStart(2, "0");
+
+    return `${yy}${ww}`;
+  };
+
+  // MIN WEEK dikunci "2501" (awal tahun), MAX WEEK ngikutin minggu
+  // berjalan (getCurrentWeekCode()) — otomatis maju tiap minggu.
+  const RMB_MIN_WEEK = "2501";
+
   // ===== CETAK RMB (Rencana Muat Barang) =====
   // Langsung cetak (window.print) tanpa modal isian — data header yang
   // gak ada di sistem (No SO, PA/EMKL, No Polisi, No Cont, LPN) dibiarin
   // kosong di form-nya, biar bisa diisi manual/dicap di kertas kalau perlu.
   const buildRmbPrintHtml = (trip) => {
     const items = trip.items || [];
-    const today = new Date().toLocaleDateString("id-ID");
+    const now = new Date();
+    const today = `${String(now.getDate()).padStart(2, "0")}/${String(
+      now.getMonth() + 1,
+    ).padStart(2, "0")}/${now.getFullYear()}`;
+    const maxWeek = getCurrentWeekCode();
 
     let totalQty = 0;
     let totalM3 = 0;
@@ -921,16 +947,13 @@ export default function TransferPlanPage() {
         totalM3 += volume;
         totalKg += berat;
 
-        // QR kolom SHIPP.INS isinya kode item (bukan barcode fisik) —
-        // di-render sinkron ke SVG string, gak butuh internet/API luar.
+        // QR kolom SHIPP.INS isinya (dipisah TAB, diakhiri baris baru):
+        // item [TAB] qty [TAB] MIN WEEK (2501 tetap) [TAB] MAX WEEK
+        // (minggu berjalan, otomatis maju tiap minggu) [LF]
+        const qrValue = `${item.item || ""}\t${qty}\t${RMB_MIN_WEEK}\t${maxWeek}\n`;
         const qrSvg = item.item
           ? renderToStaticMarkup(
-              <QRCodeSVG
-                value={item.item}
-                size={34}
-                level="M"
-                marginSize={0}
-              />,
+              <QRCodeSVG value={qrValue} size={34} level="M" marginSize={0} />,
             )
           : "";
 
@@ -970,6 +993,7 @@ export default function TransferPlanPage() {
   .addr { font-size: 13px; }
   .meta { text-align: right; font-size: 11px; }
   h1 { text-align: center; font-size: 16px; margin: 24px 0 18px; letter-spacing: 1px; }
+  .doc-code { text-align: center; font-size: 12px; font-weight: 700; margin: 24px 0 0; letter-spacing: 1px; }
   .info { display: flex; margin-bottom: 16px; }
   .info-col { font-size: 9px; }
   .info-col:first-child { flex: 0 0 51%; }
@@ -996,7 +1020,7 @@ export default function TransferPlanPage() {
   .sign { display: flex; justify-content: space-between; margin-top: 24px; text-align: center; font-size: 11px; }
   .sign > div { width: 30%; }
   .sign .line { margin-top: 60px; padding-top: 4px; }
-  .catatan { font-size: 11px; }
+  .catatan { font-size: 11px; margin-bottom: 14px; }
   .catatan .line2 { margin-top: 4px; width: 260px; padding-top: 6px; }
   .bottom { margin-top: auto; margin-bottom: 20mm; }
   @media print {
@@ -1016,6 +1040,7 @@ export default function TransferPlanPage() {
     </div>
   </div>
 
+  <div class="doc-code">M</div>
   <h1>RENCANA MUAT BARANG</h1>
 
   <div class="info">
@@ -1083,7 +1108,7 @@ export default function TransferPlanPage() {
       <div>PELAKSANAAN MUAT BARANG</div>
     </div>
     <div class="sign">
-      <div>
+      <div style="margin-left:95px;">
         <div>MENGETAHUI,</div>
         <div class="line">( SH PERENCANAAN )</div>
       </div>
@@ -2182,7 +2207,7 @@ export default function TransferPlanPage() {
           </div>
         )}
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           {manualTrips.map((trip) => {
             const tripQty = trip.items.reduce(
               (sum, i) => sum + Number(i.qty || 0),
@@ -2198,24 +2223,24 @@ export default function TransferPlanPage() {
                 key={trip.id}
                 style={{
                   border: "1px solid #e2e8f0",
-                  borderRadius: 12,
+                  borderRadius: 8,
                   overflow: "hidden",
                 }}
               >
                 {/* TRIP HEADER */}
                 <div
                   style={{
-                    padding: "10px 14px",
+                    padding: "4px 8px",
                     background: "#f8fafc",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
-                    gap: 12,
+                    gap: 6,
                     flexWrap: "wrap",
                   }}
                 >
                   <div
-                    style={{ display: "flex", alignItems: "center", gap: 10 }}
+                    style={{ display: "flex", alignItems: "center", gap: 5 }}
                   >
                     <input
                       type="text"
@@ -2224,17 +2249,17 @@ export default function TransferPlanPage() {
                         updateManualTripNo(trip.id, e.target.value)
                       }
                       style={{
-                        fontSize: 13.5,
+                        fontSize: 10.5,
                         fontWeight: 800,
                         color: "#0f172a",
                         border: "1px solid #cbd5e1",
-                        borderRadius: 6,
-                        padding: "6px 8px",
-                        width: 170,
+                        borderRadius: 4,
+                        padding: "2px 5px",
+                        width: 108,
                       }}
                     />
 
-                    <span style={{ fontSize: 11, color: "#94a3b8" }}>
+                    <span style={{ fontSize: 9, color: "#94a3b8" }}>
                       {tripQty.toLocaleString("id-ID")} Qty
                     </span>
                   </div>
@@ -2248,15 +2273,16 @@ export default function TransferPlanPage() {
                         style={{
                           display: "flex",
                           alignItems: "center",
-                          gap: 14,
+                          gap: 6,
                         }}
                       >
                         <div style={{ textAlign: "right" }}>
                           <div
                             style={{
-                              fontSize: 15,
+                              fontSize: 10.5,
                               fontWeight: 800,
                               color: badgeColor,
+                              lineHeight: 1.15,
                             }}
                           >
                             {tripVolume.toLocaleString("id-ID", {
@@ -2268,24 +2294,23 @@ export default function TransferPlanPage() {
 
                           <div
                             style={{
-                              fontSize: 10,
+                              fontSize: 8,
                               fontWeight: 700,
                               color: badgeColor,
-                              marginTop: 1,
+                              marginTop: 0,
+                              lineHeight: 1.15,
                             }}
                           >
-                            {capStatus.over
-                              ? "TIDAK MUAT 1 TRUK — "
-                              : "MUAT — "}
+                            {capStatus.over ? "TIDAK MUAT — " : "MUAT — "}
                             {capStatus.pct}% ({capStatus.label})
                           </div>
 
                           <div
                             style={{
-                              marginTop: 4,
-                              width: 130,
-                              height: 5,
-                              borderRadius: 3,
+                              marginTop: 2,
+                              width: 72,
+                              height: 3,
+                              borderRadius: 2,
                               background: "#e2e8f0",
                               overflow: "hidden",
                               marginLeft: "auto",
@@ -2306,21 +2331,21 @@ export default function TransferPlanPage() {
                           onClick={() => handlePrintRmb(trip)}
                           title="Cetak RMB"
                           style={{
-                            height: 30,
+                            height: 21,
                             display: "flex",
                             alignItems: "center",
-                            gap: 5,
-                            padding: "0 10px",
+                            gap: 3,
+                            padding: "0 6px",
                             border: "1px solid #bfdbfe",
                             background: "#eff6ff",
                             color: "#1d4ed8",
-                            borderRadius: 6,
+                            borderRadius: 4,
                             cursor: "pointer",
-                            fontSize: 11,
+                            fontSize: 9,
                             fontWeight: 700,
                           }}
                         >
-                          <Printer size={13} />
+                          <Printer size={10} />
                           Cetak RMB
                         </button>
 
@@ -2329,19 +2354,19 @@ export default function TransferPlanPage() {
                           onClick={() => removeManualTrip(trip.id)}
                           title="Hapus trip"
                           style={{
-                            height: 30,
-                            width: 30,
+                            height: 21,
+                            width: 21,
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
                             border: "1px solid #fecaca",
                             background: "#fff",
                             color: "#dc2626",
-                            borderRadius: 6,
+                            borderRadius: 4,
                             cursor: "pointer",
                           }}
                         >
-                          <Trash2 size={14} />
+                          <Trash2 size={11} />
                         </button>
                       </div>
                     );
@@ -2349,20 +2374,23 @@ export default function TransferPlanPage() {
                 </div>
 
                 {/* ITEMS */}
-                <div style={{ padding: 12 }}>
+                <div style={{ padding: 6 }}>
                   {trip.items.length === 0 ? (
                     <div
                       style={{
-                        padding: "10px 2px 14px",
+                        padding: "6px 2px 8px",
                         color: "#94a3b8",
-                        fontSize: 12,
+                        fontSize: 11,
                       }}
                     >
                       Belum ada item di trip ini. Tambahin item manual di bawah.
                     </div>
                   ) : (
                     <div style={{ overflowX: "auto" }}>
-                      <table className="ko-data-table" style={{ margin: 0 }}>
+                      <table
+                        className="ko-data-table ko-trip-table"
+                        style={{ margin: 0 }}
+                      >
                         <thead>
                           <tr>
                             <th>Item</th>
@@ -2392,11 +2420,11 @@ export default function TransferPlanPage() {
                                     )
                                   }
                                   style={{
-                                    width: 74,
-                                    padding: "5px 7px",
+                                    width: 58,
+                                    padding: "3px 5px",
                                     border: "1px solid #cbd5e1",
-                                    borderRadius: 6,
-                                    fontSize: 12,
+                                    borderRadius: 5,
+                                    fontSize: 10.5,
                                     fontWeight: 700,
                                     textAlign: "center",
                                   }}
@@ -2430,19 +2458,19 @@ export default function TransferPlanPage() {
                                   }
                                   title="Hapus item dari trip"
                                   style={{
-                                    height: 26,
-                                    width: 26,
+                                    height: 19,
+                                    width: 19,
                                     display: "flex",
                                     alignItems: "center",
                                     justifyContent: "center",
                                     border: "1px solid #fecaca",
                                     background: "#fff",
                                     color: "#dc2626",
-                                    borderRadius: 6,
+                                    borderRadius: 4,
                                     cursor: "pointer",
                                   }}
                                 >
-                                  <X size={13} />
+                                  <X size={10} />
                                 </button>
                               </td>
                             </tr>
@@ -2456,8 +2484,8 @@ export default function TransferPlanPage() {
                   {trip.items.length >= 4 ? (
                     <div
                       style={{
-                        marginTop: 10,
-                        fontSize: 11,
+                        marginTop: 5,
+                        fontSize: 9,
                         color: "#94a3b8",
                         fontStyle: "italic",
                       }}
@@ -2468,12 +2496,12 @@ export default function TransferPlanPage() {
                   ) : (
                     <div
                       style={{
-                        marginTop: 10,
+                        marginTop: 5,
                         display: "flex",
-                        gap: 8,
+                        gap: 5,
                         alignItems: "center",
                         flexWrap: "wrap",
-                        paddingTop: 10,
+                        paddingTop: 5,
                         borderTop:
                           trip.items.length > 0 ? "1px dashed #e2e8f0" : "none",
                       }}
@@ -2484,12 +2512,12 @@ export default function TransferPlanPage() {
                           updateAddItemForm(trip.id, "itemCode", e.target.value)
                         }
                         style={{
-                          flex: "1 1 260px",
-                          minWidth: 200,
-                          padding: "7px 8px",
+                          flex: "1 1 220px",
+                          minWidth: 160,
+                          padding: "3px 5px",
                           border: "1px solid #cbd5e1",
-                          borderRadius: 6,
-                          fontSize: 12,
+                          borderRadius: 4,
+                          fontSize: 9.5,
                           fontWeight: 600,
                           color: "#334155",
                         }}
@@ -2513,11 +2541,11 @@ export default function TransferPlanPage() {
                           updateAddItemForm(trip.id, "qty", e.target.value)
                         }
                         style={{
-                          width: 90,
-                          padding: "7px 8px",
+                          width: 58,
+                          padding: "3px 5px",
                           border: "1px solid #cbd5e1",
-                          borderRadius: 6,
-                          fontSize: 12,
+                          borderRadius: 4,
+                          fontSize: 9.5,
                           fontWeight: 700,
                           textAlign: "center",
                         }}
@@ -2527,22 +2555,22 @@ export default function TransferPlanPage() {
                         type="button"
                         onClick={() => addManualItemToTrip(trip.id)}
                         style={{
-                          height: 32,
+                          height: 22,
                           display: "flex",
                           alignItems: "center",
-                          gap: 6,
-                          padding: "0 12px",
+                          gap: 4,
+                          padding: "0 8px",
                           border: "1px solid #bfdbfe",
                           background: "#eff6ff",
                           color: "#1d4ed8",
-                          borderRadius: 6,
+                          borderRadius: 4,
                           cursor: "pointer",
-                          fontSize: 12,
+                          fontSize: 9.5,
                           fontWeight: 700,
                           flexShrink: 0,
                         }}
                       >
-                        <Plus size={14} />
+                        <Plus size={10} />
                         Tambah Item
                       </button>
                     </div>

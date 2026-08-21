@@ -266,24 +266,42 @@ class ControlStockModel {
   //
   // Dikelompokkan per probcode + curweek biar user bisa liat breakdown-nya
   // (mis. ada 40 unit OK minggu 2631, 5 unit OE minggu 2630, dst), bukan
-  // cuma 1 angka total doang.
+  // cuma 1 angka total doang. Barcode per unit (kolom `bc_entried`) ikut
+  // diambil & dikumpulin per grup, biar user bisa liat barcode-nya juga.
   static async _getBelumMasukLot(itemCode, kategoriFilter = null) {
     const kode = (itemCode || "").trim();
     const [rows] = await poolEdp.query(
-      `SELECT probcode, curweek, COUNT(*) AS qty
+      `SELECT probcode, curweek, bc_entried
        FROM rack
-       WHERE item = ? AND rackcode = '~'
-       GROUP BY probcode, curweek`,
+       WHERE item = ? AND rackcode = '~'`,
       [kode],
     );
 
-    let detail = rows.map((r) => ({
-      kategori: (r.probcode || "").trim()
+    const grouped = new Map();
+
+    rows.forEach((r) => {
+      const kategori = (r.probcode || "").trim()
         ? r.probcode.trim().toUpperCase()
-        : "OK",
-      curweek: (r.curweek == null ? "" : String(r.curweek)).trim(),
-      qty: Number(r.qty),
-    }));
+        : "OK";
+      const curweek = (r.curweek == null ? "" : String(r.curweek)).trim();
+      const key = `${kategori}|${curweek}`;
+      const barcode = (r.bc_entried || "").toString().trim();
+
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          kategori,
+          curweek,
+          qty: 0,
+          barcodes: [],
+        });
+      }
+
+      const g = grouped.get(key);
+      g.qty += 1;
+      if (barcode) g.barcodes.push(barcode);
+    });
+
+    let detail = [...grouped.values()];
 
     // Sama kayak filter kategori di level lokasi — kalau ada filter
     // OK/OE, cuma baris yang kategorinya cocok yang dihitung.

@@ -1,6 +1,10 @@
 const { poolUtama, poolCrossDocking } = require("../../config/database");
 
 class KarawangItemReqModel {
+  // Setiap upload Item Request baru, data lama di tabel ini di-truncate
+  // dulu (dikosongkan total) sebelum data Excel yang baru dimasukkan —
+  // jadi tabel selalu cuma isi upload TERAKHIR, gak numpuk sama upload
+  // sebelumnya.
   static async bulkCreate(rows) {
     if (!rows || rows.length === 0) {
       return {
@@ -15,6 +19,8 @@ class KarawangItemReqModel {
       row.qty,
       row.ket || "",
     ]);
+
+    await poolUtama.query("TRUNCATE TABLE stok_opname_karawang_item_req");
 
     const [result] = await poolUtama.query(
       `INSERT INTO stok_opname_karawang_item_req
