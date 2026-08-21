@@ -27,7 +27,24 @@ import {
   Printer,
   Wand2,
   Link2,
+  Boxes,
+  PieChart,
 } from "lucide-react";
+
+// Aksen warna per jenis item, dipakai di chip breakdown Jumlah Item & Total Request
+const JENIS_ACCENT = {
+  TIRE: { bg: "#dbeafe", border: "#93c5fd", text: "#1d4ed8", dot: "#2563eb" },
+  "TIRE OE": { bg: "#dbeafe", border: "#93c5fd", text: "#1d4ed8", dot: "#2563eb" },
+  "TUBE OE": { bg: "#fef3c7", border: "#fcd34d", text: "#b45309", dot: "#d97706" },
+  VALVE: { bg: "#d1fae5", border: "#6ee7b7", text: "#047857", dot: "#059669" },
+};
+const getJenisAccent = (jenis) =>
+  JENIS_ACCENT[jenis] || {
+    bg: "#e2e8f0",
+    border: "#cbd5e1",
+    text: "#334155",
+    dot: "#64748b",
+  };
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
 import TireTubePairingModal from "./TireTubePairingModal";
@@ -1299,17 +1316,18 @@ export default function TransferPlanPage() {
                 display: "flex",
                 alignItems: "center",
                 gap: 6,
-                border: "1px solid #cbd5e1",
-                background: "#fff",
-                color: "#334155",
+                border: "1.5px solid #c7d2fe",
+                background: "#eef2ff",
+                color: "#4338ca",
                 borderRadius: 8,
-                padding: "9px 16px",
+                padding: "8px 14px",
                 cursor: "pointer",
-                fontSize: 12.5,
+                fontSize: 12,
                 fontWeight: 700,
+                whiteSpace: "nowrap",
               }}
             >
-              <Link2 size={15} />
+              <Link2 size={13} />
               Kelola Master Tire-Tube
             </button>
 
@@ -1323,30 +1341,40 @@ export default function TransferPlanPage() {
                 display: "flex",
                 alignItems: "center",
                 gap: 6,
-                border: "1px solid #cbd5e1",
-                background: "#fff",
-                color: "#334155",
+                border: "1.5px solid #fde68a",
+                background: "#fffbeb",
+                color: "#b45309",
                 borderRadius: 8,
-                padding: "9px 16px",
+                padding: "8px 14px",
                 cursor: "pointer",
-                fontSize: 12.5,
+                fontSize: 12,
                 fontWeight: 700,
+                whiteSpace: "nowrap",
               }}
             >
-              <Filter size={15} />
+              <Filter size={13} />
               Filter Riwayat
             </button>
 
             <button
               type="button"
-              className="ko-btn-primary"
               onClick={() => setShowUploadModal(true)}
               style={{
-                width: "auto",
-                padding: "9px 16px",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                border: "1.5px solid #0021b3",
+                background: "#0021b3",
+                color: "#fff",
+                borderRadius: 8,
+                padding: "8px 14px",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 700,
+                whiteSpace: "nowrap",
               }}
             >
-              <Upload size={15} />
+              <Upload size={13} />
               Upload Item Request
             </button>
           </div>
@@ -1365,20 +1393,26 @@ export default function TransferPlanPage() {
       >
         <div
           style={{
-            display: "grid",
-            gridTemplateColumns: "4fr 8fr",
-            gap: 14,
-            marginBottom: 20,
+            display: "flex",
+            gap: 10,
+            marginBottom: 14,
           }}
         >
           {/* ================= JUMLAH ITEM ================= */}
           <div
             style={{
-              background: "#fff",
-              border: "1px solid #e2e8f0",
-              borderRadius: 12,
-              padding: "18px 20px",
-              boxShadow: "0 2px 8px rgba(15, 23, 42, 0.04)",
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              background:
+                "linear-gradient(135deg, #eff6ff 0%, #ffffff 55%)",
+              border: "1px solid #dbeafe",
+              borderLeft: "3px solid #3b82f6",
+              borderRadius: 8,
+              padding: "7px 12px",
+              boxShadow: "0 1px 4px rgba(15, 23, 42, 0.05)",
+              overflowX: "auto",
             }}
           >
             {(() => {
@@ -1386,41 +1420,51 @@ export default function TransferPlanPage() {
                 (total, item) => total + Number(item.jumlah_item || 0),
                 0,
               );
+              const breakdown = summaryItemReq.filter(
+                (item) => item.jenis !== "TIRE",
+              );
 
               return (
                 <>
-                  {/* HEADER + TOTAL */}
                   <div
                     style={{
                       display: "flex",
                       alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: 12,
+                      justifyContent: "center",
+                      width: 24,
+                      height: 24,
+                      borderRadius: 7,
+                      background: "#3b82f6",
+                      flexShrink: 0,
                     }}
                   >
+                    <Boxes size={14} color="#fff" />
+                  </div>
+
+                  <div style={{ whiteSpace: "nowrap" }}>
                     <div
                       style={{
-                        fontSize: 12,
-                        fontWeight: 600,
-                        color: "#64748b",
+                        fontSize: 9,
+                        fontWeight: 700,
+                        color: "#3b82f6",
                         textTransform: "uppercase",
-                        letterSpacing: "0.04em",
+                        letterSpacing: "0.03em",
                       }}
                     >
                       Jumlah Item
                     </div>
-
                     <div
                       style={{
                         fontSize: 13,
                         fontWeight: 800,
                         color: "#0f172a",
+                        lineHeight: 1.3,
                       }}
                     >
                       {totalItem.toLocaleString("id-ID")}{" "}
                       <span
                         style={{
-                          fontSize: 10,
+                          fontSize: 9,
                           fontWeight: 600,
                           color: "#94a3b8",
                         }}
@@ -1430,62 +1474,65 @@ export default function TransferPlanPage() {
                     </div>
                   </div>
 
-                  {/* BREAKDOWN JENIS */}
                   <div
                     style={{
-                      display: "flex",
-                      gap: 10,
-                      overflowX: "auto",
+                      width: 1,
+                      height: 22,
+                      background: "#dbeafe",
+                      flexShrink: 0,
                     }}
-                  >
-                    {summaryItemReq.map((item) => (
-                      <div
-                        key={item.jenis}
-                        style={{
-                          flex: 1,
-                          minWidth: 60,
-                          background: "#f8fafc",
-                          border: "1px solid #e2e8f0",
-                          borderRadius: 10,
-                          padding: "11px 13px",
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: 10.5,
-                            fontWeight: 700,
-                            color: "#64748b",
-                            marginBottom: 6,
-                            textTransform: "uppercase",
-                          }}
-                        >
-                          {item.jenis}
-                        </div>
+                  />
 
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {breakdown.map((item) => {
+                      const accent = getJenisAccent(item.jenis);
+                      return (
                         <div
+                          key={item.jenis}
                           style={{
-                            fontSize: 21,
-                            fontWeight: 800,
-                            color: "#0f172a",
-                            lineHeight: 1,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 5,
+                            background: accent.bg,
+                            border: `1px solid ${accent.border}`,
+                            borderRadius: 6,
+                            padding: "3px 9px",
+                            whiteSpace: "nowrap",
                           }}
                         >
-                          {Number(item.jumlah_item || 0).toLocaleString(
-                            "id-ID",
-                          )}
+                          <span
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: "50%",
+                              background: accent.dot,
+                              flexShrink: 0,
+                            }}
+                          />
+                          <span
+                            style={{
+                              fontSize: 9,
+                              fontWeight: 700,
+                              color: accent.text,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {item.jenis}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 800,
+                              color: "#0f172a",
+                            }}
+                          >
+                            {Number(item.jumlah_item || 0).toLocaleString(
+                              "id-ID",
+                            )}
+                          </span>
                         </div>
-
-                        <div
-                          style={{
-                            fontSize: 10,
-                            color: "#94a3b8",
-                            marginTop: 5,
-                          }}
-                        >
-                          Item
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </>
               );
@@ -1495,11 +1542,18 @@ export default function TransferPlanPage() {
           {/* ================= TOTAL REQUEST ================= */}
           <div
             style={{
-              background: "#fff",
-              border: "1px solid #e2e8f0",
-              borderRadius: 12,
-              padding: "18px 20px",
-              boxShadow: "0 2px 8px rgba(15, 23, 42, 0.04)",
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              background:
+                "linear-gradient(135deg, #f5f3ff 0%, #ffffff 55%)",
+              border: "1px solid #ede9fe",
+              borderLeft: "3px solid #8b5cf6",
+              borderRadius: 8,
+              padding: "7px 12px",
+              boxShadow: "0 1px 4px rgba(15, 23, 42, 0.05)",
+              overflowX: "auto",
             }}
           >
             {(() => {
@@ -1512,44 +1566,54 @@ export default function TransferPlanPage() {
                 (total, item) => total + Number(item.total_volume || 0),
                 0,
               );
+              const breakdown = summaryItemReq.filter(
+                (item) => item.jenis !== "TIRE",
+              );
 
               return (
                 <>
-                  {/* HEADER + TOTAL */}
                   <div
                     style={{
                       display: "flex",
                       alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: 12,
+                      justifyContent: "center",
+                      width: 24,
+                      height: 24,
+                      borderRadius: 7,
+                      background: "#8b5cf6",
+                      flexShrink: 0,
                     }}
                   >
+                    <PieChart size={14} color="#fff" />
+                  </div>
+
+                  <div style={{ whiteSpace: "nowrap" }}>
                     <div
                       style={{
-                        fontSize: 12,
-                        fontWeight: 600,
-                        color: "#64748b",
+                        fontSize: 9,
+                        fontWeight: 700,
+                        color: "#8b5cf6",
                         textTransform: "uppercase",
-                        letterSpacing: "0.04em",
+                        letterSpacing: "0.03em",
                       }}
                     >
                       Total Request
                     </div>
-
                     <div
                       style={{
                         display: "flex",
-                        alignItems: "center",
-                        gap: 7,
+                        alignItems: "baseline",
+                        gap: 5,
                         fontSize: 13,
                         fontWeight: 800,
+                        lineHeight: 1.3,
                       }}
                     >
                       <span style={{ color: "#0f172a" }}>
                         {totalQty.toLocaleString("id-ID")}{" "}
                         <span
                           style={{
-                            fontSize: 10,
+                            fontSize: 9,
                             fontWeight: 600,
                             color: "#94a3b8",
                           }}
@@ -1563,84 +1627,70 @@ export default function TransferPlanPage() {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,
                         })}{" "}
-                        <span
-                          style={{
-                            fontSize: 10,
-                            fontWeight: 600,
-                          }}
-                        >
+                        <span style={{ fontSize: 9, fontWeight: 600 }}>
                           m³
                         </span>
                       </span>
                     </div>
                   </div>
 
-                  {/* BREAKDOWN JENIS */}
                   <div
                     style={{
-                      display: "flex",
-                      gap: 10,
-                      overflowX: "auto",
+                      width: 1,
+                      height: 22,
+                      background: "#ede9fe",
+                      flexShrink: 0,
                     }}
-                  >
-                    {summaryItemReq.map((item) => (
-                      <div
-                        key={item.jenis}
-                        style={{
-                          flex: 1,
-                          minWidth: 105,
-                          background: "#f8fafc",
-                          border: "1px solid #e2e8f0",
-                          borderRadius: 10,
-                          padding: "11px 13px",
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: 10.5,
-                            fontWeight: 700,
-                            color: "#64748b",
-                            marginBottom: 6,
-                            textTransform: "uppercase",
-                          }}
-                        >
-                          {item.jenis}
-                        </div>
+                  />
 
-                        {/* QTY | VOLUME */}
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {breakdown.map((item) => {
+                      const accent = getJenisAccent(item.jenis);
+                      return (
                         <div
+                          key={item.jenis}
                           style={{
                             display: "flex",
-                            flexDirection: "column",
-                            alignItems: "baseline",
-                            gap: 7,
+                            alignItems: "center",
+                            gap: 5,
+                            background: accent.bg,
+                            border: `1px solid ${accent.border}`,
+                            borderRadius: 6,
+                            padding: "3px 9px",
                             whiteSpace: "nowrap",
                           }}
                         >
-                          <div
+                          <span
                             style={{
-                              fontSize: 21,
+                              width: 6,
+                              height: 6,
+                              borderRadius: "50%",
+                              background: accent.dot,
+                              flexShrink: 0,
+                            }}
+                          />
+                          <span
+                            style={{
+                              fontSize: 9,
+                              fontWeight: 700,
+                              color: accent.text,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {item.jenis}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 12,
                               fontWeight: 800,
                               color: "#0f172a",
-                              lineHeight: 1,
                             }}
                           >
                             {Number(item.total_qty || 0).toLocaleString(
                               "id-ID",
                             )}
-                            <span
-                              style={{
-                                fontSize: 10,
-                                fontWeight: 600,
-                                color: "#94a3b8",
-                                marginLeft: 4,
-                              }}
-                            >
-                              Qty
-                            </span>
-                          </div>
-
-                          <div
+                          </span>
+                          <span
                             style={{
                               fontSize: 10,
                               fontWeight: 700,
@@ -1655,12 +1705,10 @@ export default function TransferPlanPage() {
                               },
                             )}{" "}
                             m³
-                          </div>
+                          </span>
                         </div>
-
-                        {/* JUMLAH ITEM */}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </>
               );

@@ -51,7 +51,7 @@ class KarawangItemReqModel {
     const [reqRows] = await poolUtama.query(`
       SELECT TRIM(UPPER(item)) AS item, SUM(CAST(qty AS DECIMAL(15,3))) AS qty
       FROM stok_opname_karawang_item_req
-      WHERE date = CURDATE() AND UPPER(jenis) LIKE 'OE TIRE%'
+      WHERE UPPER(jenis) LIKE 'OE TIRE%'
       GROUP BY TRIM(UPPER(item))
     `);
 
@@ -116,8 +116,7 @@ class KarawangItemReqModel {
     FROM stok_opname_karawang_item_req r
     LEFT JOIN stok_opname_karawang_master_item m
       ON r.item = m.code_no
-    WHERE r.date = CURDATE()
-      AND UPPER(r.jenis) NOT LIKE 'OE TIRE%'
+    WHERE UPPER(r.jenis) NOT LIKE 'OE TIRE%'
     GROUP BY r.jenis
   `);
 
@@ -213,7 +212,6 @@ class KarawangItemReqModel {
     const [reqRows] = await poolUtama.query(`
       SELECT TRIM(UPPER(item)) AS item, SUM(CAST(qty AS DECIMAL(15,3))) AS qty
       FROM stok_opname_karawang_item_req
-      WHERE date = CURDATE()
       GROUP BY TRIM(UPPER(item))
     `);
 
