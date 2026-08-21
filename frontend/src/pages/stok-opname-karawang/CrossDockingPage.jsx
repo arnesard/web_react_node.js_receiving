@@ -141,6 +141,23 @@ const DETAIL_ALL_EXPORT_COLUMNS = [
   { key: "hold_reason4", label: "Hold RND" },
 ];
 
+// Urutin baris berdasarkan curweek dari yang PALING TUA (angka terkecil)
+// duluan — format curweek biasanya YYWW (mis. 2634), jadi urut ascending
+// numerik = dari minggu paling lama ke paling baru. Baris yang curweek-nya
+// kosong/gak kebaca angka ditaro paling belakang.
+function sortByCurweekOldestFirst(rows) {
+  return [...rows].sort((a, b) => {
+    const weekA = Number(getFieldValue(a, "curweek"));
+    const weekB = Number(getFieldValue(b, "curweek"));
+    const validA = Number.isFinite(weekA);
+    const validB = Number.isFinite(weekB);
+    if (!validA && !validB) return 0;
+    if (!validA) return 1;
+    if (!validB) return -1;
+    return weekA - weekB;
+  });
+}
+
 function csvEscape(value) {
   const text = String(value ?? "");
   if (/[",\r\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
@@ -461,7 +478,7 @@ export default function CrossDockingPage() {
           params: queryParams(),
         }),
       ]);
-      setSummaryRows(summaryRes.data?.data || []);
+      setSummaryRows(sortByCurweekOldestFirst(summaryRes.data?.data || []));
       setTotals(totalsRes.data?.data || null);
       setLoaded(true);
     } catch (err) {
@@ -496,7 +513,7 @@ export default function CrossDockingPage() {
           params: queryParams(),
         },
       );
-      setDetailRows(res.data?.data || []);
+      setDetailRows(sortByCurweekOldestFirst(res.data?.data || []));
     } catch (err) {
       setShowDetailModal(false);
       setError(
@@ -529,7 +546,7 @@ export default function CrossDockingPage() {
           timeout: 5 * 60 * 1000, // 5 menit — bisa lama kalau kombinasi rack+item banyak
         },
       );
-      const exportRows = res.data?.data || [];
+      const exportRows = sortByCurweekOldestFirst(res.data?.data || []);
       const meta = res.data?.meta;
       downloadCsv(
         exportRows,
@@ -677,7 +694,12 @@ export default function CrossDockingPage() {
         <div className="ko-cd-actions-row">
           <button
             className="ko-btn-secondary ko-btn-download"
-            onClick={() => downloadCsv(summaryRows, "cross-docking-summary")}
+            onClick={() =>
+              downloadCsv(
+                sortByCurweekOldestFirst(summaryRows),
+                "cross-docking-summary",
+              )
+            }
             disabled={summaryRows.length === 0}
           >
             <Download size={16} /> Export CSV
@@ -685,7 +707,10 @@ export default function CrossDockingPage() {
           <button
             className="ko-btn-secondary"
             onClick={() =>
-              printRows(summaryRows, "Monitoring Stock Cross Docking")
+              printRows(
+                sortByCurweekOldestFirst(summaryRows),
+                "Monitoring Stock Cross Docking",
+              )
             }
             disabled={summaryRows.length === 0}
           >

@@ -412,7 +412,10 @@ class ControlStockModel {
     // query IN (?) OR (?) OR (?) OR (?) ke fgloc di bawah maupun ke
     // hitungan "belum masuk lot" nanti.
     const isRackcodeVirtual = (rc) =>
-      rc === "CUSTOMER" || rc === "COLLIE" || /^~?T-\d+$/i.test(rc);
+      rc === "CUSTOMER" ||
+      rc === "COLLIE" ||
+      rc.startsWith("#") ||
+      /^~?T-\d+$/i.test(rc);
     const rackcodesFisik = rackHits
       .map((r) => (r.rackcode || "").trim())
       .filter((rc) => rc && !isRackcodeVirtual(rc));

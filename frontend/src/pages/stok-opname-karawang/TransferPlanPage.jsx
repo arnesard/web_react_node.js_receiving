@@ -157,6 +157,10 @@ export default function TransferPlanPage() {
       berat,
       total_berat: Number((qty * berat).toFixed(2)),
       pairedTire: String(tireCode).trim().toUpperCase(),
+      stok_tangerang: Number(
+        previewItems.find((i) => i.item === pair.tube_code)?.stok_tangerang ||
+          0,
+      ),
     };
   };
 
@@ -494,6 +498,7 @@ export default function TransferPlanPage() {
             total_volume: itemVolume,
             berat,
             total_berat: Number((qty * berat).toFixed(2)),
+            stok_tangerang: Number(item.stok_tangerang || 0),
           });
         }
         bestTrip._volume = Number((bestTrip._volume + itemVolume).toFixed(3));
@@ -709,6 +714,7 @@ export default function TransferPlanPage() {
             total_volume: Number((finalQty * volume).toFixed(3)),
             berat,
             total_berat: Number((finalQty * berat).toFixed(2)),
+            stok_tangerang: Number(meta.stok_tangerang || 0),
           });
         }
 
@@ -936,14 +942,14 @@ export default function TransferPlanPage() {
         <td class="r">${qty.toLocaleString("id-ID")}</td>
         <td class="c"></td>
         <td class="c">BPW1</td>
-        <td class="c"></td>
+        <td class="c">${Number(item.stok_tangerang || 0).toLocaleString("id-ID")}</td>
         <td class="c"></td>
         <td class="c">PCS</td>
         <td class="r">${volume.toLocaleString("id-ID", {
           minimumFractionDigits: 3,
           maximumFractionDigits: 3,
         })}</td>
-        <td class="c qr-cell">${qrSvg}</td>
+        <td class="c qr-cell ${idx % 2 === 0 ? "qr-left" : "qr-right"}">${qrSvg}</td>
         <td></td>
         <td class="c"></td>
       </tr>`;
@@ -960,36 +966,45 @@ export default function TransferPlanPage() {
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; color: #1e293b; font-size: 11px; margin: 0; }
   .top { display: flex; justify-content: space-between; align-items: flex-start; }
-  .company { font-weight: 700; font-size: 13px; }
-  .addr { font-size: 11px; }
+  .company { font-weight: 700; font-size: 16px; }
+  .addr { font-size: 13px; }
   .meta { text-align: right; font-size: 11px; }
-  h1 { text-align: center; font-size: 20px; margin: 8px 0 18px; letter-spacing: 1px; }
-  .info { display: flex; justify-content: space-between; gap: 40px; margin-bottom: 16px; }
-  .info table { border-collapse: collapse; }
-  .info td { padding: 2px 6px; font-size: 11px; vertical-align: top; }
-  .info td.label { font-weight: 200; white-space: nowrap; }
+  h1 { text-align: center; font-size: 16px; margin: 24px 0 18px; letter-spacing: 1px; }
+  .info { display: flex; margin-bottom: 16px; }
+  .info-col { font-size: 9px; }
+  .info-col:first-child { flex: 0 0 51%; }
+  .info-col:last-child { flex: 1; }
+  .info-row { display: flex; padding: 2px 0; }
+  .info-row .label { width: 58px; flex-shrink: 0; font-weight: 200; white-space: nowrap; }
+  .info-row .colon { width: 8px; flex-shrink: 0; }
+  .info-row .value { flex: 1; }
   table.items { width: 100%; border-collapse: collapse; margin-top: 6px; }
   table.items th, table.items td {padding: 4px 6px; font-size: 9px; }
-  table.items th { background: #374151; color: #fff; text-align: center; }
+  table.items th { color: #000; font-weight: 700; text-align: center; }
+  table.items th .th-line { display: inline-block; border-bottom: 1.5px dashed #000; padding-bottom: 4px; }
   table.items td.c { text-align: center; }
   table.items td.r { text-align: right; }
   table.items td.qr-cell { padding: 2px 4px; line-height: 0; }
-  table.items td.qr-cell svg { width: 30px; height: 30px; display: block; margin: 0 auto; }
-  .totals-row { display: flex; justify-content: flex-end; gap: 30px; margin-top: 10px; font-weight: 700; font-size: 11px; }
-  .sign-header { display: flex; justify-content: space-between; margin-top: 40px; text-align: center; font-size: 11px; font-weight: 700; }
+  table.items td.qr-cell svg { width: 30px; height: 30px; display: block; }
+  table.items td.qr-cell.qr-left svg { margin: 0 auto 0 2px; }
+  table.items td.qr-cell.qr-right svg { margin: 0 2px 0 auto; }
+  .footer-row { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 10px; }
+  .totals-row { display: flex; gap: 30px; font-weight: 700; font-size: 11px; }
+  .sign-header { display: flex; justify-content: space-between; margin-top: 30px; text-align: center; font-size: 11px; font-weight: 700; }
   .sign-header > div { width: 30%; }
   .sign-header > div:last-child { width: 60%; }
-  .sign { display: flex; justify-content: space-between; margin-top: 4px; text-align: center; font-size: 11px; }
+  .sign { display: flex; justify-content: space-between; margin-top: 24px; text-align: center; font-size: 11px; }
   .sign > div { width: 30%; }
-  .sign .line { margin-top: 60px; border-top: 1px solid #000; padding-top: 4px; }
-  .catatan { font-size: 11px; margin-top: 40px; }
-  .catatan .line2 { margin-top: 4px; border-top: 1px solid #94a3b8; width: 260px; padding-top: 6px; }
+  .sign .line { margin-top: 60px; padding-top: 4px; }
+  .catatan { font-size: 11px; }
+  .catatan .line2 { margin-top: 4px; width: 260px; padding-top: 6px; }
+  .bottom { margin-top: auto; margin-bottom: 20mm; }
   @media print {
     .no-print { display: none; }
   }
 </style>
 </head>
-<body>
+<body style="display: flex; flex-direction: column; min-height: 100vh;">
   <div class="top">
     <div>
       <div class="company">PT. GAJAH TUNGGAL TBK</div>
@@ -1004,39 +1019,39 @@ export default function TransferPlanPage() {
   <h1>RENCANA MUAT BARANG</h1>
 
   <div class="info">
-    <table>
-      <tr><td class="label">NO SO</td><td>:</td><td></td></tr>
-      <tr><td class="label">CUSTOMER</td><td>:</td><td>GT DC Karawang</td></tr>
-      <tr><td class="label">KOTA</td><td>:</td><td>Jawa Barat</td></tr>
-      <tr><td class="label">NO KIRIM</td><td>:</td><td>${trip.no_trip || ""}</td></tr>
-      <tr><td class="label">TGL KIRIM</td><td>:</td><td>${today}</td></tr>
-      <tr><td class="label">NAMA TRIP</td><td>:</td><td></td></tr>
-    </table>
-    <table>
-      <tr><td class="label">PA/EMKL</td><td>:</td><td></td></tr>
-      <tr><td class="label">JEN. KEND</td><td>:</td><td></td></tr>
-      <tr><td class="label">NO POLISI</td><td>:</td><td></td></tr>
-      <tr><td class="label">NO CONT</td><td>:</td><td></td></tr>
-      <tr><td class="label">LPN</td><td>:</td><td></td></tr>
-    </table>
+    <div class="info-col">
+      <div class="info-row"><span class="label">NO SO</span><span class="colon">:</span><span class="value"></span></div>
+      <div class="info-row"><span class="label">CUSTOMER</span><span class="colon">:</span><span class="value">GT DC Karawang</span></div>
+      <div class="info-row"><span class="label">KOTA</span><span class="colon">:</span><span class="value">Jawa Barat</span></div>
+      <div class="info-row"><span class="label">NO KIRIM</span><span class="colon">:</span><span class="value">${trip.no_trip || ""}</span></div>
+      <div class="info-row"><span class="label">TGL KIRIM</span><span class="colon">:</span><span class="value">${today}</span></div>
+      <div class="info-row"><span class="label">NAMA TRIP</span><span class="colon">:</span><span class="value"></span></div>
+    </div>
+    <div class="info-col">
+      <div class="info-row"><span class="label">PA/EMKL</span><span class="colon">:</span><span class="value"></span></div>
+      <div class="info-row"><span class="label">JEN. KEND</span><span class="colon">:</span><span class="value"></span></div>
+      <div class="info-row"><span class="label">NO POLISI</span><span class="colon">:</span><span class="value"></span></div>
+      <div class="info-row"><span class="label">NO CONT</span><span class="colon">:</span><span class="value"></span></div>
+      <div class="info-row"><span class="label">LPN</span><span class="colon">:</span><span class="value"></span></div>
+    </div>
   </div>
 
   <table class="items">
     <thead>
       <tr>
-        <th style="width: 3%;">NO.</th>
-        <th style="width: 11%;">KODE ITEM</th>
-        <th style="width: 29%;">DESKRIPSI</th>
-        <th style="width: 4%;">KIRIM</th>
-        <th style="width: 4%;">EXTRA</th>
-        <th style="width: 4%;">S.INV</th>
-        <th style="width: 4%;">STOK</th>
-        <th style="width: 4%;">AKTUAL</th>
-        <th style="width: 4%;">UOM</th>
-        <th style="width: 4%;">M3</th>
-        <th style="width: 7%;">SHIPP.INS.</th>
-        <th style="width: 7%;">PACK.INS.</th>
-        <th style="width: 15%;">NO SO.</th>
+        <th style="width: 3%;"><span class="th-line">NO.</span></th>
+        <th style="width: 11%;"><span class="th-line">KODE ITEM</span></th>
+        <th style="width: 24%;"><span class="th-line">DESKRIPSI</span></th>
+        <th style="width: 4%;"><span class="th-line">KIRIM</span></th>
+        <th style="width: 4%;"><span class="th-line">EXTRA</span></th>
+        <th style="width: 4%;"><span class="th-line">S.INV</span></th>
+        <th style="width: 4%;"><span class="th-line">STOK</span></th>
+        <th style="width: 4%;"><span class="th-line">AKTUAL</span></th>
+        <th style="width: 4%;"><span class="th-line">UOM</span></th>
+        <th style="width: 4%;"><span class="th-line">M3</span></th>
+        <th style="width: 20%;"><span class="th-line">SHIPP.INS.</span></th>
+        <th style="width: 4%;"><span class="th-line">PACK.INS.</span></th>
+        <th style="width: 10%;"><span class="th-line">NO SO.</span></th>
       </tr>
     </thead>
     <tbody>
@@ -1044,40 +1059,43 @@ export default function TransferPlanPage() {
     </tbody>
   </table>
 
-  <div class="totals-row">
-    <div>TOTAL PCS : ${totalQty.toLocaleString("id-ID")}</div>
-    <div>TOTAL M3 : ${totalM3.toLocaleString("id-ID", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}</div>
-    <div>TOTAL KG : ${totalKg.toLocaleString("id-ID", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}</div>
-  </div>
+  <div class="bottom">
+    <div class="footer-row">
+      <div class="catatan">
+        <div>Catatan :</div>
+        <div class="line2">&nbsp;</div>
+      </div>
+      <div class="totals-row">
+        <div>TOTAL PCS : ${totalQty.toLocaleString("id-ID")}</div>
+        <div>TOTAL M3 : ${totalM3.toLocaleString("id-ID", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}</div>
+        <div>TOTAL KG : ${totalKg.toLocaleString("id-ID", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}</div>
+      </div>
+    </div>
 
-  <div class="sign-header">
-    <div></div>
-    <div>PELAKSANAAN MUAT BARANG</div>
-  </div>
-  <div class="sign">
-    <div>
-      <div>MENGETAHUI,</div>
-      <div class="line">( SH PERENCANAAN )</div>
+    <div class="sign-header">
+      <div></div>
+      <div>PELAKSANAAN MUAT BARANG</div>
     </div>
-    <div>
-      <div>MENYERAHKAN,</div>
-      <div class="line">(&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;)</div>
+    <div class="sign">
+      <div>
+        <div>MENGETAHUI,</div>
+        <div class="line">( SH PERENCANAAN )</div>
+      </div>
+      <div>
+        <div>MENYERAHKAN,</div>
+        <div class="line">(&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;)</div>
+      </div>
+      <div>
+        <div>MENERIMA,</div>
+        <div class="line">(&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;)</div>
+      </div>
     </div>
-    <div>
-      <div>MENERIMA,</div>
-      <div class="line">(&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;)</div>
-    </div>
-  </div>
-
-  <div class="catatan">
-    <div>Catatan :</div>
-    <div class="line2">&nbsp;</div>
   </div>
 </body>
 </html>`;
