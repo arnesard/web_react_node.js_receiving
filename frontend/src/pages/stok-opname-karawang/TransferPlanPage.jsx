@@ -152,6 +152,16 @@ export default function TransferPlanPage() {
     loadTireTubePairs();
   }, []);
 
+  // Semua item yang berpasangan sama TUBE (tube-type tire) kirimnya
+  // emang HARUS dari BPW1 di lapangan — baik tire-nya sendiri MAUPUN
+  // tube pasangannya, gak ngikut lokasi live Tangerang lagi. Item yang
+  // gak punya pasangan (non tube-type) tetep ngikut lokasi live-nya
+  // masing-masing (bisa BPW1 / BPW2 / dst).
+  const isTubeType = (itemCode) =>
+    tireTubePairMap.has(String(itemCode).trim().toUpperCase());
+  const effectiveGedung = (itemCode, liveGedung) =>
+    isTubeType(itemCode) ? "BPW1" : liveGedung;
+
   // Bikin 1 baris item "tube pasangan" dari data master pairing, qty
   // ngikutin qty tire-nya (1:1). Ditandain pairedTire biar sinkron pas
   // qty tire diubah / tire dihapus dari trip (lihat updateManualTripItemQty
@@ -178,8 +188,9 @@ export default function TransferPlanPage() {
         previewItems.find((i) => i.item === pair.tube_code)?.stok_tangerang ||
           0,
       ),
-      // OE TUBE lokasinya emang di BPW1, gak ikut lokasi live tire
-      // pasangannya (yang bisa aja di BPW2).
+      // Tube-type: tire + tube pasangannya SELALU BPW1 (lihat
+      // effectiveGedung). Field ini masih editable manual lewat tombol
+      // Edit Gedung per item di kartu trip kalau ternyata beda.
       gedung: "BPW1",
     };
   };
@@ -384,7 +395,16 @@ export default function TransferPlanPage() {
           const volume = Number(item.volume || 0);
           const lineVolume = Number((allocQty * volume).toFixed(3));
 
-          return { ...item, sisa, allocQty, volume, lineVolume };
+          // Tire tube-type (punya pasangan tube) SELALU dari BPW1, gak
+          // ngikut lokasi live Tangerang lagi -- lihat effectiveGedung.
+          return {
+            ...item,
+            sisa,
+            allocQty,
+            volume,
+            lineVolume,
+            gedung: effectiveGedung(item.item, item.gedung),
+          };
         })
         .filter((item) => item.sisa > 0 && item.allocQty > 0);
 
@@ -453,8 +473,9 @@ export default function TransferPlanPage() {
       // Best-fit bin-packing dijalanin TERPISAH per gedung (BPW1, BPW2,
       // dst -- lihat item.gedung dari previewItems/ControlStockModel),
       // jadi 1 trip GAK PERNAH nyampur item dari gedung yang beda (truk
-      // cuma ambil dari 1 gedung sekali jalan). OE TUBE udah dipatok
-      // "BPW1" dari backend, item lain ngikutin lokasi live Tangerang-nya.
+      // cuma ambil dari 1 gedung sekali jalan). TUBE OE ngikutin gedung
+      // tire pasangannya (lihat buildPairedTubeLine), item lain ngikutin
+      // lokasi live Tangerang-nya.
       // Item yang gedung-nya gak ketemu (lokasi live-nya kosong) masuk
       // grup "TANPA GEDUNG" tersendiri, ditaruh paling belakang.
       const chunksByGedung = new Map();
@@ -682,6 +703,14 @@ export default function TransferPlanPage() {
     const trip = manualTrips.find((t) => t.id === tripId);
     const alreadyInTrip = trip?.items.some((i) => i.item === itemCode);
 
+    const meta = previewItems.find((i) => i.item === itemCode) || {};
+    const deskripsi = meta.deskripsi || "";
+    const volume = Number(meta.volume || 0);
+    const berat = Number(meta.berat || 0);
+    // Tire tube-type (punya pasangan tube) SELALU dari BPW1 -- lihat
+    // effectiveGedung.
+    const itemGedung = effectiveGedung(itemCode, meta.gedung || null);
+
     // Tube pasangan (kalau ada) bakal ikut nambah baris juga — hitung dulu
     // biar cek "trip penuh" (maks 4 item/trip) akurat buat KEDUANYA.
     const pairedTubeLine = buildPairedTubeLine(itemCode, qty);
@@ -698,11 +727,6 @@ export default function TransferPlanPage() {
       );
       return;
     }
-
-    const meta = previewItems.find((i) => i.item === itemCode) || {};
-    const deskripsi = meta.deskripsi || "";
-    const volume = Number(meta.volume || 0);
-    const berat = Number(meta.berat || 0);
 
     // ===== AUTO-CAP KAPASITAS TRUK =====
     // Volume trip gak boleh lewat truckCapacity. Tube pasangan gak
@@ -769,7 +793,7 @@ export default function TransferPlanPage() {
             berat,
             total_berat: Number((finalQty * berat).toFixed(2)),
             stok_tangerang: Number(meta.stok_tangerang || 0),
-            gedung: meta.gedung || null,
+            gedung: itemGedung,
           });
         }
 
@@ -847,6 +871,41 @@ export default function TransferPlanPage() {
   const updateManualTripNo = (tripId, value) => {
     setManualTrips((prev) =>
       prev.map((t) => (t.id === tripId ? { ...t, no_trip: value } : t)),
+    );
+  };
+
+  // Edit gedung (BPW1/BPW2) buat SATU NO TRIP -- ikut nyamain gedung
+  // SEMUA item di dalam trip itu, biar konsisten (satu trip = satu
+  // gedung asal truk). Kalau ada item yang emang beda gedung-nya,
+  // benerin lagi manual per item lewat updateManualTripItemGedung.
+  const updateManualTripGedung = (tripId, gedung) => {
+    setManualTrips((prev) =>
+      prev.map((t) =>
+        t.id === tripId
+          ? {
+              ...t,
+              gedung,
+              items: t.items.map((i) => ({ ...i, gedung })),
+            }
+          : t,
+      ),
+    );
+  };
+
+  // Edit gedung (BPW1/BPW2) buat SATU ITEM di dalam trip (override
+  // manual, gak ngubah gedung trip-nya atau item lain).
+  const updateManualTripItemGedung = (tripId, itemCode, gedung) => {
+    setManualTrips((prev) =>
+      prev.map((t) =>
+        t.id === tripId
+          ? {
+              ...t,
+              items: t.items.map((i) =>
+                i.item === itemCode ? { ...i, gedung } : i,
+              ),
+            }
+          : t,
+      ),
     );
   };
 
@@ -974,6 +1033,16 @@ export default function TransferPlanPage() {
   // berjalan (getCurrentWeekCode()) — otomatis maju tiap minggu.
   const RMB_MIN_WEEK = "2501";
 
+  // Barcode buat NO KIRIM — pakai QRCodeSVG yang sama kaya kolom
+  // SHIPP.INS. (bukan JsBarcode), jadi tinggal renderToStaticMarkup
+  // biasa, konsisten sama QR yang udah ada.
+  const renderNoKirimBarcodeSvg = (value) => {
+    if (!value) return "";
+    return renderToStaticMarkup(
+      <QRCodeSVG value={String(value)} size={34} level="M" marginSize={0} />,
+    );
+  };
+
   // ===== CETAK RMB (Rencana Muat Barang) =====
   // Langsung cetak (window.print) tanpa modal isian — data header yang
   // gak ada di sistem (No SO, PA/EMKL, No Polisi, No Cont, LPN) dibiarin
@@ -985,6 +1054,7 @@ export default function TransferPlanPage() {
       now.getMonth() + 1,
     ).padStart(2, "0")}/${now.getFullYear()}`;
     const maxWeek = getCurrentWeekCode();
+    const noKirimBarcodeSvg = renderNoKirimBarcodeSvg(trip.no_trip);
 
     let totalQty = 0;
     let totalM3 = 0;
@@ -1057,6 +1127,9 @@ export default function TransferPlanPage() {
   .info-row .label { width: 58px; flex-shrink: 0; font-weight: 200; white-space: nowrap; }
   .info-row .colon { width: 8px; flex-shrink: 0; }
   .info-row .value { flex: 1; }
+  .info-row.no-kirim-row { position: relative; }
+  .no-kirim-barcode { position: absolute; left: 160px; top: -6px; line-height: 0; }
+  .no-kirim-barcode svg { width: 30px; height: 30px; display: block; }
   table.items { width: 100%; border-collapse: collapse; margin-top: 6px; }
   table.items th, table.items td {padding: 4px 6px; font-size: 9px; }
   table.items th { color: #000; font-weight: 700; text-align: center; }
@@ -1103,7 +1176,7 @@ export default function TransferPlanPage() {
       <div class="info-row"><span class="label">NO SO</span><span class="colon">:</span><span class="value"></span></div>
       <div class="info-row"><span class="label">CUSTOMER</span><span class="colon">:</span><span class="value">GT DC Karawang</span></div>
       <div class="info-row"><span class="label">KOTA</span><span class="colon">:</span><span class="value">Jawa Barat</span></div>
-      <div class="info-row"><span class="label">NO KIRIM</span><span class="colon">:</span><span class="value">${trip.no_trip || ""}</span></div>
+      <div class="info-row no-kirim-row"><span class="label">NO KIRIM</span><span class="colon">:</span><span class="value">${trip.no_trip || ""}</span>${noKirimBarcodeSvg ? `<span class="no-kirim-barcode">${noKirimBarcodeSvg}</span>` : ""}</div>
       <div class="info-row"><span class="label">TGL KIRIM</span><span class="colon">:</span><span class="value">${today}</span></div>
       <div class="info-row"><span class="label">NAMA TRIP</span><span class="colon">:</span><span class="value"></span></div>
     </div>
@@ -1257,8 +1330,6 @@ export default function TransferPlanPage() {
       });
 
       setManualTrips([]);
-      setRowQty({});
-      setRowTripSelect({});
 
       await Promise.all([loadSummaryItemReq(), loadPreview()]);
     } catch (err) {
@@ -1310,8 +1381,6 @@ export default function TransferPlanPage() {
     if (!result.isConfirmed) return;
 
     setManualTrips([]);
-    setRowQty({});
-    setRowTripSelect({});
 
     Swal.fire({
       title: "Trip Berhasil Direset",
@@ -2362,7 +2431,12 @@ export default function TransferPlanPage() {
                     </span>
 
                     {trip.gedung && (
-                      <span
+                      <select
+                        value={trip.gedung}
+                        onChange={(e) =>
+                          updateManualTripGedung(trip.id, e.target.value)
+                        }
+                        title="Edit gedung asal truk (ikut nyamain semua item di trip ini)"
                         style={{
                           fontSize: 9,
                           fontWeight: 700,
@@ -2370,11 +2444,16 @@ export default function TransferPlanPage() {
                           background: "#eff6ff",
                           border: "1px solid #bfdbfe",
                           borderRadius: 4,
-                          padding: "1px 5px",
+                          padding: "1px 4px",
+                          cursor: "pointer",
                         }}
                       >
-                        {trip.gedung}
-                      </span>
+                        <option value="BPW1">BPW1</option>
+                        <option value="BPW2">BPW2</option>
+                        {trip.gedung !== "BPW1" && trip.gedung !== "BPW2" && (
+                          <option value={trip.gedung}>{trip.gedung}</option>
+                        )}
+                      </select>
                     )}
                   </div>
 
@@ -2512,6 +2591,7 @@ export default function TransferPlanPage() {
                             <th>Qty</th>
                             <th>Vol/Qty</th>
                             <th>Total Volume</th>
+                            <th>Gedung</th>
                             <th></th>
                           </tr>
                         </thead>
@@ -2563,6 +2643,41 @@ export default function TransferPlanPage() {
                                   },
                                 )}{" "}
                                 m³
+                              </td>
+                              <td>
+                                <select
+                                  value={item.gedung || ""}
+                                  onChange={(e) =>
+                                    updateManualTripItemGedung(
+                                      trip.id,
+                                      item.item,
+                                      e.target.value,
+                                    )
+                                  }
+                                  title="Edit gedung item ini"
+                                  style={{
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    color: item.gedung ? "#2563eb" : "#dc2626",
+                                    border: "1px solid #cbd5e1",
+                                    borderRadius: 4,
+                                    padding: "2px 4px",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  {!item.gedung && (
+                                    <option value="">?</option>
+                                  )}
+                                  <option value="BPW1">BPW1</option>
+                                  <option value="BPW2">BPW2</option>
+                                  {item.gedung !== "BPW1" &&
+                                    item.gedung !== "BPW2" &&
+                                    item.gedung && (
+                                      <option value={item.gedung}>
+                                        {item.gedung}
+                                      </option>
+                                    )}
+                                </select>
                               </td>
                               <td>
                                 <button
