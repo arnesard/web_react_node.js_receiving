@@ -7,6 +7,7 @@ const CrossDockingController = require("../../controllers/stok-opname-karawang/C
 const FifoController = require("../../controllers/stok-opname-karawang/FifoController");
 const TransferPlanController = require("../../controllers/stok-opname-karawang/TransferPlanController");
 const KarawangTireTubePairingController = require("../../controllers/stok-opname-karawang/KarawangTireTubePairingController");
+const TripPerTrukController = require("../../controllers/stok-opname-karawang/TripPerTrukController");
 const uploadItemReq = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -107,5 +108,12 @@ router.delete(
   "/tire-tube-pairing/:id",
   KarawangTireTubePairingController.remove,
 );
+
+// ── Report "Trip per Truk" -- dari API "Monitoring Transfer" punya
+// server Cross Docking (beda endpoint dari /cross-docking/* di atas,
+// tapi 1 server yang sama, lihat CrossDockingClient.fetchTransferOrders).
+// Dalam 1 truk (nopol) hari itu ada berapa trip (loadId), tiap trip isi
+// item apa aja + ukuran ban + qty.
+router.get("/trip-per-truk", TripPerTrukController.index);
 
 module.exports = router;

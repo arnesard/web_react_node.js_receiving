@@ -138,6 +138,18 @@ class CrossDockingClient {
   static async fetchDetail(rackcode, item) {
     return request("/stock-cd/detail", { rackcode, item });
   }
+
+  // ── Menu "Monitoring Transfer" (beda dari Monitoring Stock Cross
+  // Docking di atas, tapi 1 server/base URL yang sama) — data per baris
+  // order/trip: loadId (no trip), nopol (plat truk), item, qty request
+  // vs actual, status, dst. Dipake buat report "Trip per Truk".
+  static async fetchTransferOrders(date, byField = "load_id") {
+    return request("/orders", { date, byField });
+  }
+
+  static async fetchTransferSummary(date) {
+    return request("/summary", { date });
+  }
 }
 
 module.exports = CrossDockingClient;

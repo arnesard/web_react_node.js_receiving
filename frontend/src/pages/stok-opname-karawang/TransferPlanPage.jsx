@@ -29,6 +29,7 @@ import {
   Link2,
   Boxes,
   PieChart,
+  Truck,
 } from "lucide-react";
 
 // Aksen warna per jenis item, dipakai di chip breakdown Jumlah Item & Total Request
@@ -48,6 +49,7 @@ const getJenisAccent = (jenis) =>
 import api from "../../api/axiosInstance";
 import KarawangSubNav from "./KarawangSubNav";
 import TireTubePairingModal from "./TireTubePairingModal";
+import TripPerTrukModal from "./TripPerTrukModal";
 import { karawangStyles } from "./karawangStyles";
 import * as XLSX from "xlsx-js-style";
 
@@ -61,6 +63,10 @@ export default function TransferPlanPage() {
   // Tire<->Tube, dibuka dari tombol di header Transfer Plan (menu/halaman
   // terpisah "Master Tire-Tube" sudah dihapus).
   const [showTireTubeModal, setShowTireTubeModal] = useState(false);
+  // Modal "Trip per Truk" — rekap jumlah trip tiap truk (nopol) hari ini
+  // dari data live Monitoring Transfer (Cross Docking), lihat
+  // TripPerTrukModal.jsx.
+  const [showTripPerTrukModal, setShowTripPerTrukModal] = useState(false);
   // Tabel "Preview Item Request & Stok" disembunyikan di halaman utama,
   // baru muncul setelah tombol "Rencana Transfer" diklik.
   const [showPreviewTable, setShowPreviewTable] = useState(false);
@@ -161,6 +167,11 @@ export default function TransferPlanPage() {
     tireTubePairMap.has(String(itemCode).trim().toUpperCase());
   const effectiveGedung = (itemCode, liveGedung) =>
     isTubeType(itemCode) ? "BPW1" : liveGedung;
+  // Tube-type tire (punya pasangan tube) DIHITUNG 2 SLOT dari batas "maks 4
+  // item per trip" pas auto-generate -- soalnya nantinya bakal nambahin 1
+  // baris tube lagi (lihat buildPairedTubeLine, auto-add SETELAH bin-packing
+  // tire selesai). Tire biasa (non tube-type) tetep 1 slot.
+  const itemSlotCount = (itemCode) => (isTubeType(itemCode) ? 2 : 1);
 
   // Bikin 1 baris item "tube pasangan" dari data master pairing, qty
   // ngikutin qty tire-nya (1:1). Ditandain pairedTire biar sinkron pas
@@ -371,7 +382,9 @@ export default function TransferPlanPage() {
   //   gak ada yang muat. Ini bikin utilisasi tiap truk jauh lebih rata &
   //   maksimal dibanding sekadar isi berurutan sampai limit ke-4 item.
   // - Batasan per trip tetep 2: MAX 4 ITEM & volume gak boleh lebih dari
-  //   Kapasitas Truk (m³).
+  //   Kapasitas Truk (m³). Tire tube-type (punya pasangan tube) DIHITUNG
+  //   2 ITEM dari batas ini -- soalnya ban luar & ban dalemnya jalan
+  //   bareng jadi 2 baris (lihat itemSlotCount & buildPairedTubeLine).
   const handleAutoGenerateTrip = () => {
     if (!previewItems.length) {
       Swal.fire(
@@ -517,14 +530,17 @@ export default function TransferPlanPage() {
           // baru. Batas "4 item per trip" tetep berlaku buat BARIS ITEM
           // BEDA -- tapi kalau item ini emang udah ada di trip itu (chunk
           // lanjutan dari item yang sama), tetep boleh gabung walau trip
-          // udah ada 4 baris beda (gak nambah baris baru, cuma nambah
-          // qty di baris yang sama).
+          // udah kepenuhan slotnya (gak nambah baris baru, cuma nambah
+          // qty di baris yang sama). Tire tube-type makan 2 slot sekaligus
+          // (lihat itemSlotCount) karena bakal nambahin 1 baris tube lagi.
           let bestTrip = null;
           let bestLeftover = Infinity;
+          const neededSlots = itemSlotCount(item.item);
 
           groupTrips.forEach((t) => {
             const sudahAdaItemIni = t.items.some((i) => i.item === item.item);
-            if (t.items.length >= 4 && !sudahAdaItemIni) return;
+            const slotsUsed = t._slots || 0;
+            if (slotsUsed + neededSlots > 4 && !sudahAdaItemIni) return;
 
             const newVolume = Number((t._volume + itemVolume).toFixed(3));
             if (cap > 0 && newVolume > cap) return;
@@ -545,6 +561,7 @@ export default function TransferPlanPage() {
               gedung,
               items: [],
               _volume: 0,
+              _slots: 0,
             };
             groupTrips.push(bestTrip);
           }
@@ -570,6 +587,8 @@ export default function TransferPlanPage() {
               stok_tangerang: Number(item.stok_tangerang || 0),
               gedung: item.gedung || null,
             });
+            // Baris baru (bukan chunk lanjutan) -- baru makan slot.
+            bestTrip._slots = (bestTrip._slots || 0) + neededSlots;
           }
           bestTrip._volume = Number(
             (bestTrip._volume + itemVolume).toFixed(3),
@@ -605,7 +624,7 @@ export default function TransferPlanPage() {
         });
       });
 
-      const newTrips = trips.map(({ _volume, ...t }) => t);
+      const newTrips = trips.map(({ _volume, _slots, ...t }) => t);
 
       setManualTrips((prev) => [...prev, ...newTrips]);
       setShowPreviewTable(false);
@@ -1436,6 +1455,29 @@ export default function TransferPlanPage() {
             >
               <Link2 size={13} />
               Kelola Master Tire-Tube
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowTripPerTrukModal(true)}
+              title="Trip per Truk (dari data live Monitoring Transfer)"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                border: "1.5px solid #bae6fd",
+                background: "#f0f9ff",
+                color: "#0369a1",
+                borderRadius: 8,
+                padding: "8px 14px",
+                cursor: "pointer",
+                fontSize: 12,
+                fontWeight: 700,
+                whiteSpace: "nowrap",
+              }}
+            >
+              <Truck size={13} />
+              Trip per Truk
             </button>
 
             <button
@@ -3579,6 +3621,10 @@ export default function TransferPlanPage() {
           onClose={() => setShowTireTubeModal(false)}
           onChanged={loadTireTubePairs}
         />
+      )}
+
+      {showTripPerTrukModal && (
+        <TripPerTrukModal onClose={() => setShowTripPerTrukModal(false)} />
       )}
     </div>
   );
