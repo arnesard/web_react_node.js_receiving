@@ -178,6 +178,9 @@ export default function TransferPlanPage() {
         previewItems.find((i) => i.item === pair.tube_code)?.stok_tangerang ||
           0,
       ),
+      // OE TUBE lokasinya emang di BPW1, gak ikut lokasi live tire
+      // pasangannya (yang bisa aja di BPW2).
+      gedung: "BPW1",
     };
   };
 
@@ -446,79 +449,113 @@ export default function TransferPlanPage() {
       // best-fit yang sebenarnya dijalanin di bawah.
       chunks.sort((a, b) => b.lineVolume - a.lineVolume);
 
+      // ===== GROUPING PER GEDUNG (loccode Tangerang) =====
+      // Best-fit bin-packing dijalanin TERPISAH per gedung (BPW1, BPW2,
+      // dst -- lihat item.gedung dari previewItems/ControlStockModel),
+      // jadi 1 trip GAK PERNAH nyampur item dari gedung yang beda (truk
+      // cuma ambil dari 1 gedung sekali jalan). OE TUBE udah dipatok
+      // "BPW1" dari backend, item lain ngikutin lokasi live Tangerang-nya.
+      // Item yang gedung-nya gak ketemu (lokasi live-nya kosong) masuk
+      // grup "TANPA GEDUNG" tersendiri, ditaruh paling belakang.
+      const chunksByGedung = new Map();
+      chunks.forEach((item) => {
+        const gedung = item.gedung || "TANPA GEDUNG";
+        if (!chunksByGedung.has(gedung)) chunksByGedung.set(gedung, []);
+        chunksByGedung.get(gedung).push(item);
+      });
+      const gedungOrder = [...chunksByGedung.keys()].sort((a, b) => {
+        if (a === "TANPA GEDUNG") return 1;
+        if (b === "TANPA GEDUNG") return -1;
+        return a.localeCompare(b);
+      });
+
       const trips = [];
       let seq = manualTrips.length;
       let partialCount = 0;
       const partialItemSeen = new Set();
 
-      chunks.forEach((item) => {
-        const berat = Number(item.berat || 0);
-        const qty = item.allocQty;
-        const itemVolume = item.lineVolume;
+      gedungOrder.forEach((gedung) => {
+        // Trip existing yang dicari best-fit-nya cuma trip DALAM GEDUNG
+        // YANG SAMA (groupTrips lokal per gedung) -- bukan `trips` global
+        // -- biar item BPW1 gak pernah ke-nyelip ke trip yang isinya BPW2.
+        const groupTrips = [];
 
-        if (item.qty < item.sisa && !partialItemSeen.has(item.item)) {
-          partialItemSeen.add(item.item);
-          partialCount += 1;
-        }
+        chunksByGedung.get(gedung).forEach((item) => {
+          const berat = Number(item.berat || 0);
+          const qty = item.allocQty;
+          const itemVolume = item.lineVolume;
 
-        // Cari trip existing yang masih muat dengan sisa ruang PALING
-        // KECIL (best fit) supaya truk yang udah lumayan penuh ditambalin
-        // dulu, bukan malah buka trip baru. Batas "4 item per trip" tetep
-        // berlaku buat BARIS ITEM BEDA — tapi kalau item ini emang udah
-        // ada di trip itu (chunk lanjutan dari item yang sama), tetep
-        // boleh gabung walau trip udah ada 4 baris beda (gak nambah
-        // baris baru, cuma nambah qty di baris yang sama).
-        let bestTrip = null;
-        let bestLeftover = Infinity;
-
-        trips.forEach((t) => {
-          const sudahAdaItemIni = t.items.some((i) => i.item === item.item);
-          if (t.items.length >= 4 && !sudahAdaItemIni) return;
-
-          const newVolume = Number((t._volume + itemVolume).toFixed(3));
-          if (cap > 0 && newVolume > cap) return;
-
-          const leftover = cap > 0 ? cap - newVolume : Infinity;
-
-          if (leftover < bestLeftover) {
-            bestLeftover = leftover;
-            bestTrip = t;
+          if (item.qty < item.sisa && !partialItemSeen.has(item.item)) {
+            partialItemSeen.add(item.item);
+            partialCount += 1;
           }
+
+          // Cari trip existing (di gedung yang sama) yang masih muat
+          // dengan sisa ruang PALING KECIL (best fit) supaya truk yang
+          // udah lumayan penuh ditambalin dulu, bukan malah buka trip
+          // baru. Batas "4 item per trip" tetep berlaku buat BARIS ITEM
+          // BEDA -- tapi kalau item ini emang udah ada di trip itu (chunk
+          // lanjutan dari item yang sama), tetep boleh gabung walau trip
+          // udah ada 4 baris beda (gak nambah baris baru, cuma nambah
+          // qty di baris yang sama).
+          let bestTrip = null;
+          let bestLeftover = Infinity;
+
+          groupTrips.forEach((t) => {
+            const sudahAdaItemIni = t.items.some((i) => i.item === item.item);
+            if (t.items.length >= 4 && !sudahAdaItemIni) return;
+
+            const newVolume = Number((t._volume + itemVolume).toFixed(3));
+            if (cap > 0 && newVolume > cap) return;
+
+            const leftover = cap > 0 ? cap - newVolume : Infinity;
+
+            if (leftover < bestLeftover) {
+              bestLeftover = leftover;
+              bestTrip = t;
+            }
+          });
+
+          if (!bestTrip) {
+            seq += 1;
+            bestTrip = {
+              id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${seq}`,
+              no_trip: generateManualDoNumber(seq),
+              gedung,
+              items: [],
+              _volume: 0,
+            };
+            groupTrips.push(bestTrip);
+          }
+
+          const idx = bestTrip.items.findIndex((i) => i.item === item.item);
+          if (idx >= 0) {
+            const mergedQty = Number(bestTrip.items[idx].qty) + qty;
+            bestTrip.items[idx] = {
+              ...bestTrip.items[idx],
+              qty: mergedQty,
+              total_volume: Number((mergedQty * item.volume).toFixed(3)),
+              total_berat: Number((mergedQty * berat).toFixed(2)),
+            };
+          } else {
+            bestTrip.items.push({
+              item: item.item,
+              deskripsi: item.deskripsi,
+              qty,
+              volume: item.volume,
+              total_volume: itemVolume,
+              berat,
+              total_berat: Number((qty * berat).toFixed(2)),
+              stok_tangerang: Number(item.stok_tangerang || 0),
+              gedung: item.gedung || null,
+            });
+          }
+          bestTrip._volume = Number(
+            (bestTrip._volume + itemVolume).toFixed(3),
+          );
         });
 
-        if (!bestTrip) {
-          seq += 1;
-          bestTrip = {
-            id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${seq}`,
-            no_trip: generateManualDoNumber(seq),
-            items: [],
-            _volume: 0,
-          };
-          trips.push(bestTrip);
-        }
-
-        const idx = bestTrip.items.findIndex((i) => i.item === item.item);
-        if (idx >= 0) {
-          const mergedQty = Number(bestTrip.items[idx].qty) + qty;
-          bestTrip.items[idx] = {
-            ...bestTrip.items[idx],
-            qty: mergedQty,
-            total_volume: Number((mergedQty * item.volume).toFixed(3)),
-            total_berat: Number((mergedQty * berat).toFixed(2)),
-          };
-        } else {
-          bestTrip.items.push({
-            item: item.item,
-            deskripsi: item.deskripsi,
-            qty,
-            volume: item.volume,
-            total_volume: itemVolume,
-            berat,
-            total_berat: Number((qty * berat).toFixed(2)),
-            stok_tangerang: Number(item.stok_tangerang || 0),
-          });
-        }
-        bestTrip._volume = Number((bestTrip._volume + itemVolume).toFixed(3));
+        trips.push(...groupTrips);
       });
 
       // Auto-add tube pasangan tiap tire yang barusan masuk trip (qty 1:1,
@@ -732,6 +769,7 @@ export default function TransferPlanPage() {
             berat,
             total_berat: Number((finalQty * berat).toFixed(2)),
             stok_tangerang: Number(meta.stok_tangerang || 0),
+            gedung: meta.gedung || null,
           });
         }
 
@@ -981,7 +1019,7 @@ export default function TransferPlanPage() {
         <td>${item.deskripsi || ""}</td>
         <td class="r">${qty.toLocaleString("id-ID")}</td>
         <td class="c"></td>
-        <td class="c">BPW1</td>
+        <td class="c">${item.gedung || trip.gedung || "BPW1"}</td>
         <td class="c">${Number(item.stok_tangerang || 0).toLocaleString("id-ID")}</td>
         <td class="c"></td>
         <td class="c">PCS</td>
@@ -1914,6 +1952,7 @@ export default function TransferPlanPage() {
                       <th style={{ whiteSpace: "nowrap" }}>Qty Request</th>
                       <th style={{ whiteSpace: "nowrap" }}>Sudah Masuk Trip</th>
                       <th style={{ whiteSpace: "nowrap" }}>Sisa</th>
+                      <th style={{ whiteSpace: "nowrap" }}>Gedung</th>
                       <th style={{ whiteSpace: "nowrap" }}>Stok Tangerang</th>
                       <th style={{ whiteSpace: "nowrap" }}>Stok Karawang</th>
                     </tr>
@@ -1969,6 +2008,17 @@ export default function TransferPlanPage() {
                             }}
                           >
                             {sisa.toLocaleString("id-ID")}
+                          </td>
+
+                          <td
+                            className="ko-mono"
+                            style={{
+                              textAlign: "center",
+                              fontWeight: 700,
+                              color: item.gedung ? "#2563eb" : "#dc2626",
+                            }}
+                          >
+                            {item.gedung || "?"}
                           </td>
 
                           <td
@@ -2310,6 +2360,22 @@ export default function TransferPlanPage() {
                     <span style={{ fontSize: 9, color: "#94a3b8" }}>
                       {tripQty.toLocaleString("id-ID")} Qty
                     </span>
+
+                    {trip.gedung && (
+                      <span
+                        style={{
+                          fontSize: 9,
+                          fontWeight: 700,
+                          color: "#2563eb",
+                          background: "#eff6ff",
+                          border: "1px solid #bfdbfe",
+                          borderRadius: 4,
+                          padding: "1px 5px",
+                        }}
+                      >
+                        {trip.gedung}
+                      </span>
+                    )}
                   </div>
 
                   {(() => {

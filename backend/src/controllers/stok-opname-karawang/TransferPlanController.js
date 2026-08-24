@@ -133,6 +133,7 @@ class TransferPlanController {
 
         let stokTangerang = 0;
         let stokKarawang = 0;
+        let lokasiTangerang = [];
 
         try {
           // Stok Tangerang cuma dihitung kategori OE (bukan OK+OE gabungan)
@@ -141,6 +142,7 @@ class TransferPlanController {
             "OE",
           );
           stokTangerang = dataTangerang?.summary?.total_qty || 0;
+          lokasiTangerang = dataTangerang?.lokasi || [];
         } catch (err) {
           console.error(
             `previewItemRequest: gagal ambil stok Tangerang untuk ${item.item} (lookup ${lookupCode}):`,
@@ -161,10 +163,21 @@ class TransferPlanController {
           );
         }
 
+        // OE TUBE dipatok "BPW1" (sesuai lokasi rak fisiknya di lapangan).
+        // Item lain: gedung diturunin dari `lokasi` yang UDAH ke-fetch di
+        // atas buat stok Tangerang (findLocationsByItem) — TIDAK query
+        // EDP lagi terpisah, biar gak nembak rack/fgloc dua kali buat data
+        // yang sama (itu yang bikin preview lemot sebelumnya).
+        const isTube = /^OE\s*TUBE/i.test(item.jenis || "");
+        const gedung = isTube
+          ? "BPW1"
+          : ControlStockModel.deriveGedungFromLokasi(lokasiTangerang);
+
         return {
           ...item,
           stok_tangerang: stokTangerang,
           stok_karawang: stokKarawang,
+          gedung,
         };
       });
 

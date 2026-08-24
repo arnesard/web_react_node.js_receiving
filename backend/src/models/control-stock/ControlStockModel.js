@@ -384,6 +384,54 @@ class ControlStockModel {
     }));
   }
 
+  // ==== GEDUNG (BPW1/BPW2/dst) PER ITEM — buat Transfer Plan Karawang ====
+  // "Gedung" diambil dari prefix loccol SEBELUM tanda "-" (mis. loccol
+  // "BPW01-A0101" -> gedung "BPW1"; leading zero di angkanya dibuang biar
+  // "BPW01" & "BPW1" dianggap gedung yang sama).
+  //
+  // CATATAN: format "BPW01-A0101" itu asumsi dari contoh yang ada di
+  // komentar findLocationsByItem di bawah — kalau ternyata format loccol
+  // asli beda (misal gak pakai strip, atau urutan angka/hurufnya beda),
+  // regex di _extractGedungFromLoccol tinggal disesuaikan.
+  static _extractGedungFromLoccol(loccol) {
+    const raw = String(loccol || "").trim();
+    if (!raw) return null;
+    const prefix = raw.split("-")[0].trim().toUpperCase();
+    const match = prefix.match(/^([A-Z]+)0*(\d+)/);
+    if (match) return `${match[1]}${match[2]}`;
+    return prefix || null;
+  }
+
+  // Nentuin gedung (mayoritas, berdasarkan qty) dari `lokasi` yang UDAH
+  // di-fetch lewat findLocationsByItem() — SENGAJA gak query EDP lagi di
+  // sini (murni olah data JS), soalnya data lokasi + qty per lot udah ada
+  // di hasil findLocationsByItem. Kalau ini query ulang ke rack/fgloc,
+  // EDP ketembak 2x kerjaan yang sama buat 1 item yang sama (itu yang
+  // bikin preview Transfer Plan lemot kalau dipisah jadi query sendiri).
+  // lokasi: array hasil findLocationsByItem(...).lokasi — tiap elemen
+  // punya `loccol` & `qty_lokasi`.
+  static deriveGedungFromLokasi(lokasi) {
+    if (!Array.isArray(lokasi) || !lokasi.length) return null;
+
+    const gedungQty = new Map();
+    lokasi.forEach((loc) => {
+      const gedung = this._extractGedungFromLoccol(loc.loccol);
+      if (!gedung) return;
+      const qty = Number(loc.qty_lokasi || 0);
+      gedungQty.set(gedung, (gedungQty.get(gedung) || 0) + qty);
+    });
+
+    let best = null;
+    let bestQty = -1;
+    for (const [gedung, qty] of gedungQty.entries()) {
+      if (qty > bestQty) {
+        best = gedung;
+        bestQty = qty;
+      }
+    }
+    return best;
+  }
+
   // Fungsi utama: cari SEMUA lokasi (lot) tempat sebuah kode item berada.
   // Balikin null kalau kode item kosong. Kalau item gak ketemu di lokasi
   // manapun, tetep balikin objek dengan `lokasi: []` (bukan null) biar

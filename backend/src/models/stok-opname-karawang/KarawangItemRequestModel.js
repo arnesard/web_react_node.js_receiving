@@ -209,8 +209,13 @@ class KarawangItemReqModel {
   // Trip Plan awalnya cuma buat tire; sekarang manual trip planning juga
   // ngover OE TUBE/OE VALVE makanya filter jenis-nya dibuka semua.
   static async getTireTripItemsFromRequestOnly() {
+    // jenis ikut ditarik (MAX — asumsi 1 kode item cuma didaftarin dengan 1
+    // jenis yang sama tiap upload) biar caller (TransferPlanController)
+    // bisa bedain OE TUBE dari jenis lain, buat nentuin gedung asalnya.
     const [reqRows] = await poolUtama.query(`
-      SELECT TRIM(UPPER(item)) AS item, SUM(CAST(qty AS DECIMAL(15,3))) AS qty
+      SELECT TRIM(UPPER(item)) AS item,
+             SUM(CAST(qty AS DECIMAL(15,3))) AS qty,
+             MAX(jenis) AS jenis
       FROM stok_opname_karawang_item_req
       GROUP BY TRIM(UPPER(item))
     `);
@@ -239,6 +244,7 @@ class KarawangItemReqModel {
       return {
         item: r.item,
         qty,
+        jenis: r.jenis || "",
         deskripsi,
         volume,
         total_volume: Number((qty * volume).toFixed(3)),
