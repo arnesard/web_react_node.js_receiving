@@ -35,8 +35,18 @@ import {
 // Aksen warna per jenis item, dipakai di chip breakdown Jumlah Item & Total Request
 const JENIS_ACCENT = {
   TIRE: { bg: "#dbeafe", border: "#93c5fd", text: "#1d4ed8", dot: "#2563eb" },
-  "TIRE OE": { bg: "#dbeafe", border: "#93c5fd", text: "#1d4ed8", dot: "#2563eb" },
-  "TUBE OE": { bg: "#fef3c7", border: "#fcd34d", text: "#b45309", dot: "#d97706" },
+  "TIRE OE": {
+    bg: "#dbeafe",
+    border: "#93c5fd",
+    text: "#1d4ed8",
+    dot: "#2563eb",
+  },
+  "TUBE OE": {
+    bg: "#fef3c7",
+    border: "#fcd34d",
+    text: "#b45309",
+    dot: "#d97706",
+  },
   VALVE: { bg: "#d1fae5", border: "#6ee7b7", text: "#047857", dot: "#059669" },
 };
 const getJenisAccent = (jenis) =>
@@ -121,6 +131,11 @@ export default function TransferPlanPage() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historySearched, setHistorySearched] = useState(false);
   const [expandedHistoryId, setExpandedHistoryId] = useState(null);
+
+  // Catatan RMB — diisi user pas mau cetak (lewat prompt Swal di
+  // handlePrintRmb), disimpan per trip.id biar kalau trip yang sama
+  // dicetak ulang, catatan sebelumnya masih keisi (gak perlu ngetik ulang).
+  const [catatanByTrip, setCatatanByTrip] = useState({});
 
   const loadSummaryItemReq = async () => {
     try {
@@ -590,9 +605,7 @@ export default function TransferPlanPage() {
             // Baris baru (bukan chunk lanjutan) -- baru makan slot.
             bestTrip._slots = (bestTrip._slots || 0) + neededSlots;
           }
-          bestTrip._volume = Number(
-            (bestTrip._volume + itemVolume).toFixed(3),
-          );
+          bestTrip._volume = Number((bestTrip._volume + itemVolume).toFixed(3));
         });
 
         trips.push(...groupTrips);
@@ -1066,8 +1079,17 @@ export default function TransferPlanPage() {
   // Langsung cetak (window.print) tanpa modal isian — data header yang
   // gak ada di sistem (No SO, PA/EMKL, No Polisi, No Cont, LPN) dibiarin
   // kosong di form-nya, biar bisa diisi manual/dicap di kertas kalau perlu.
-  const buildRmbPrintHtml = (trip) => {
+  const buildRmbPrintHtml = (trip, catatan = "") => {
     const items = trip.items || [];
+    // Escape dulu biar catatan yang ada karakter <, >, & gak ngerusak HTML
+    // hasil cetak. Baris baru (Enter) diubah jadi <br/> biar tetep kebaca
+    // per baris pas dicetak.
+    const catatanHtml = String(catatan || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .split("\n")
+      .join("<br/>");
     const now = new Date();
     const today = `${String(now.getDate()).padStart(2, "0")}/${String(
       now.getMonth() + 1,
@@ -1235,7 +1257,7 @@ export default function TransferPlanPage() {
     <div class="footer-row">
       <div class="catatan">
         <div>Catatan :</div>
-        <div class="line2">&nbsp;</div>
+        <div class="line2">${catatanHtml || "&nbsp;"}</div>
       </div>
       <div class="totals-row">
         <div>TOTAL PCS : ${totalQty.toLocaleString("id-ID")}</div>
@@ -1273,8 +1295,10 @@ export default function TransferPlanPage() {
 </html>`;
   };
 
-  // Langsung buka window print, gak ada modal isian sama sekali.
-  const handlePrintRmb = (trip) => {
+  // Sebelum cetak, tanya dulu catatan RMB-nya lewat Swal (textarea) —
+  // prefill dari catatan yang udah pernah diisi buat trip ini (kalau ada).
+  // Kalau user klik "Batal", gak jadi cetak.
+  const handlePrintRmb = async (trip) => {
     if (!trip.items.length) {
       Swal.fire(
         "Belum Ada Item",
@@ -1284,7 +1308,29 @@ export default function TransferPlanPage() {
       return;
     }
 
-    const html = buildRmbPrintHtml(trip);
+    const { value: catatan, isConfirmed } = await Swal.fire({
+      title: "Catatan RMB",
+      html: `<div style="text-align:left; font-size:12px; color:#64748b; margin-bottom:6px;">No Trip: <strong>${
+        trip.no_trip || "-"
+      }</strong></div>`,
+      input: "textarea",
+      inputLabel: "Isi catatan yang mau muncul di lembar RMB (opsional)",
+      inputValue: catatanByTrip[trip.id] || "",
+      inputPlaceholder: "Muat di Gudang BPW1/BPW 2 ",
+      inputAttributes: { style: "min-height: 90px;" },
+      showCancelButton: true,
+      confirmButtonText: "Cetak",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#1d4ed8",
+    });
+
+    if (!isConfirmed) return;
+
+    // Simpen biar kalau trip yang sama dicetak ulang, catatan sebelumnya
+    // masih keisi (gak perlu ngetik ulang dari nol).
+    setCatatanByTrip((prev) => ({ ...prev, [trip.id]: catatan || "" }));
+
+    const html = buildRmbPrintHtml(trip, catatan || "");
     const printWindow = window.open("", "_blank", "width=1200,height=800");
 
     if (!printWindow) {
@@ -1554,8 +1600,7 @@ export default function TransferPlanPage() {
               display: "flex",
               alignItems: "center",
               gap: 10,
-              background:
-                "linear-gradient(135deg, #eff6ff 0%, #ffffff 55%)",
+              background: "linear-gradient(135deg, #eff6ff 0%, #ffffff 55%)",
               border: "1px solid #dbeafe",
               borderLeft: "3px solid #3b82f6",
               borderRadius: 8,
@@ -1695,8 +1740,7 @@ export default function TransferPlanPage() {
               display: "flex",
               alignItems: "center",
               gap: 10,
-              background:
-                "linear-gradient(135deg, #f5f3ff 0%, #ffffff 55%)",
+              background: "linear-gradient(135deg, #f5f3ff 0%, #ffffff 55%)",
               border: "1px solid #ede9fe",
               borderLeft: "3px solid #8b5cf6",
               borderRadius: 8,
@@ -1776,9 +1820,7 @@ export default function TransferPlanPage() {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,
                         })}{" "}
-                        <span style={{ fontSize: 9, fontWeight: 600 }}>
-                          m³
-                        </span>
+                        <span style={{ fontSize: 9, fontWeight: 600 }}>m³</span>
                       </span>
                     </div>
                   </div>
@@ -2707,9 +2749,7 @@ export default function TransferPlanPage() {
                                     cursor: "pointer",
                                   }}
                                 >
-                                  {!item.gedung && (
-                                    <option value="">?</option>
-                                  )}
+                                  {!item.gedung && <option value="">?</option>}
                                   <option value="BPW1">BPW1</option>
                                   <option value="BPW2">BPW2</option>
                                   {item.gedung !== "BPW1" &&
@@ -3624,7 +3664,10 @@ export default function TransferPlanPage() {
       )}
 
       {showTripPerTrukModal && (
-        <TripPerTrukModal onClose={() => setShowTripPerTrukModal(false)} />
+        <TripPerTrukModal
+          trips={manualTrips}
+          onClose={() => setShowTripPerTrukModal(false)}
+        />
       )}
     </div>
   );
