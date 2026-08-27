@@ -215,7 +215,8 @@ class KarawangItemReqModel {
     const [reqRows] = await poolUtama.query(`
       SELECT TRIM(UPPER(item)) AS item,
              SUM(CAST(qty AS DECIMAL(15,3))) AS qty,
-             MAX(jenis) AS jenis
+             MAX(jenis) AS jenis,
+             MAX(date) AS tanggal_request
       FROM stok_opname_karawang_item_req
       GROUP BY TRIM(UPPER(item))
     `);
@@ -250,6 +251,7 @@ class KarawangItemReqModel {
         total_volume: Number((qty * volume).toFixed(3)),
         berat,
         total_berat: Number((qty * berat).toFixed(2)),
+        tanggal_request: r.tanggal_request || null,
       };
     });
   }

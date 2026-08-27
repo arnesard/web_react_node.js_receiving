@@ -8,6 +8,7 @@
 //    Schedule OEM dari bpw_dept_db.sch_oem (lihat KarawangItemRequestModel
 //    getTireTripItems di backend).
 import { useState, useEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QRCodeSVG } from "qrcode.react";
 import Swal from "sweetalert2";
@@ -106,6 +107,7 @@ export default function TransferPlanPage() {
 
   // ============ PREVIEW ITEM REQUEST + STOK TANGERANG/KARAWANG ============
   const [previewItems, setPreviewItems] = useState([]);
+  const [draftReady, setDraftReady] = useState(false);
   const [loadingPreview, setLoadingPreview] = useState(false);
 
   // ============ MANUAL TRIP BUILDER ============
@@ -125,6 +127,14 @@ export default function TransferPlanPage() {
   // (cuma 1 yang kebuka dalam satu waktu). itemPickerSearch: teks filter.
   const [itemPickerOpenTripId, setItemPickerOpenTripId] = useState(null);
   const [itemPickerSearch, setItemPickerSearch] = useState("");
+  // Posisi dropdown item picker dipindah render-nya lewat portal ke
+  // <body> (lihat itemPickerAnchorRect) -- soalnya kartu trip pembungkus
+  // dropdown ini pakai `overflow:hidden` (buat mbulet-in sudut header),
+  // jadi kalau dropdown-nya position:absolute biasa di dalam situ,
+  // bagian yang nongol keluar batas kartu kepotong / gak kelihatan sama
+  // sekali. Portal + posisi fixed dari getBoundingClientRect nge-skip
+  // masalah itu total.
+  const [itemPickerAnchorRect, setItemPickerAnchorRect] = useState(null);
 
   // ============ HISTORI TRIP PLAN (Filter Riwayat) ============
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -180,6 +190,38 @@ export default function TransferPlanPage() {
     loadTireTubePairs();
   }, []);
 
+  // Tambel tanggal_request buat trip DRAFT LAMA (dibikin sebelum fix
+  // tanggal RMB ada) yang item-nya belum kebawa field tanggal_request
+  // sama sekali -- draft ini disimpan di server & di-load balik pas
+  // halaman dibuka (lihat efek draft di bawah), jadi kalau gak ditambel,
+  // item lama tetep bakal fallback ke tanggal-hari-ini pas dicetak
+  // walaupun kode-nya udah dibenerin. User GAK PERLU upload ulang Excel
+  // buat ini -- data tanggal_request-nya udah ada & bener di previewItems
+  // (dari DB), cuma perlu ditempel ulang ke item yang udah kadung
+  // nempel di trip draft. Nunggu DUA-DUANYA siap (previewItems ke-load
+  // DAN draft-nya kelar di-restore) via draftReady -- soalnya urutan
+  // selesainya 2 request async ini (loadPreview vs getTripPlanDraft) gak
+  // pasti, dan kalau backfill ini jalan duluan sebelum draft ke-restore,
+  // gak ada apa2 buat ditambel (manualTrips masih kosong).
+  useEffect(() => {
+    if (!previewItems.length || !draftReady) return;
+
+    setManualTrips((prev) => {
+      let changed = false;
+      const next = prev.map((trip) => {
+        const items = (trip.items || []).map((it) => {
+          if (it.tanggal_request) return it;
+          const found = previewItems.find((p) => p.item === it.item);
+          if (!found?.tanggal_request) return it;
+          changed = true;
+          return { ...it, tanggal_request: found.tanggal_request };
+        });
+        return { ...trip, items };
+      });
+      return changed ? next : prev;
+    });
+  }, [previewItems, draftReady]);
+
   // ============ DRAFT TRIP PLAN (persist across refresh / PC lain) ============
   // Trip yang lagi disusun (manualTrips) disimpan otomatis (debounced) ke
   // backend tiap kali berubah, dan di-load balik pas halaman dibuka --
@@ -217,6 +259,7 @@ export default function TransferPlanPage() {
         // effect autosave di bawah gak nembak nyimpen draft KOSONG duluan
         // sebelum draft lama sempet ke-load.
         draftLoadedRef.current = true;
+        setDraftReady(true);
       }
     })();
   }, []);
@@ -283,6 +326,9 @@ export default function TransferPlanPage() {
         previewItems.find((i) => i.item === pair.tube_code)?.stok_tangerang ||
           0,
       ),
+      tanggal_request:
+        previewItems.find((i) => i.item === pair.tube_code)
+          ?.tanggal_request || null,
       // Tube-type: tire + tube pasangannya SELALU BPW1 (lihat
       // effectiveGedung). Field ini masih editable manual lewat tombol
       // Edit Gedung per item di kartu trip kalau ternyata beda.
@@ -669,6 +715,7 @@ export default function TransferPlanPage() {
               berat,
               total_berat: Number((qty * berat).toFixed(2)),
               stok_tangerang: Number(item.stok_tangerang || 0),
+              tanggal_request: item.tanggal_request || null,
               gedung: item.gedung || null,
             });
             // Baris baru (bukan chunk lanjutan) -- baru makan slot.
@@ -894,6 +941,7 @@ export default function TransferPlanPage() {
             berat,
             total_berat: Number((finalQty * berat).toFixed(2)),
             stok_tangerang: Number(meta.stok_tangerang || 0),
+            tanggal_request: meta.tanggal_request || null,
             gedung: itemGedung,
           });
         }
@@ -1017,54 +1065,70 @@ export default function TransferPlanPage() {
   const handleSetTripTruck = async (tripId) => {
     const trip = manualTrips.find((t) => t.id === tripId);
 
-    // Daftar truk yang UDAH kepake di trip lain hari ini, biar user bisa
-    // milih cepet (klik) daripada ngetik ulang -- tetep bisa ngetik nama
-    // truk baru kalau belum ada di daftar.
-    const usedTrucks = Array.from(
+    // "Pilih Truk" itu milih SLOT truk (Truk 1, Truk 2, dst), BUKAN input
+    // no. polisi -- karena 1 truk fisik bisa jalan lebih dari 1 trip
+    // sekaligus (nanti dikelompokin bareng di modal "Trip per Truk"). No.
+    // polisi asli tetap diisi manual di kertas RMB (kolomnya sengaja
+    // dikosongin, lihat buildRmbPrintHtml).
+    const usedTruckNumbers = Array.from(
       new Set(
         manualTrips
           .map((t) => (t.truck || "").trim())
-          .filter((v) => v && v !== (trip?.truck || "").trim()),
+          .filter(Boolean)
+          .map((label) => {
+            const m = label.match(/^Truk\s+(\d+)$/i);
+            return m ? Number(m[1]) : null;
+          })
+          .filter((n) => n !== null),
       ),
-    );
+    ).sort((a, b) => a - b);
 
-    const quickPickHtml = usedTrucks.length
-      ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;justify-content:center;">
-          ${usedTrucks
-            .map(
-              (tk) =>
-                `<button type="button" class="ko-truck-quickpick" data-truck="${tk.replace(/"/g, "&quot;")}" style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:5px;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;cursor:pointer;">${tk}</button>`,
-            )
-            .join("")}
-        </div>`
-      : "";
+    const nextTruckNumber =
+      (usedTruckNumbers.length ? Math.max(...usedTruckNumbers) : 0) + 1;
 
-    const { value: truckValue, isConfirmed } = await Swal.fire({
-      title: "Truk Buat Trip Ini",
-      html: quickPickHtml,
-      input: "text",
-      inputLabel: "No. Polisi / Kode Truk",
+    // Opsi = truk yang udah dipake trip lain + 1 slot truk baru berikutnya,
+    // minimal selalu ada "Truk 1".
+    const optionNumbers = Array.from(
+      new Set([...usedTruckNumbers, nextTruckNumber, 1]),
+    ).sort((a, b) => a - b);
+
+    const inputOptions = optionNumbers.reduce((acc, n) => {
+      const label = `Truk ${n}`;
+      const tripsOnThisTruck = manualTrips.filter(
+        (t) => (t.truck || "").trim() === label && t.id !== tripId,
+      ).length;
+      acc[label] = tripsOnThisTruck
+        ? `${label} (udah ada ${tripsOnThisTruck} trip lain)`
+        : `${label} (kosong)`;
+      return acc;
+    }, {});
+
+    const { value: truckValue, isConfirmed, isDenied } = await Swal.fire({
+      title: "Pilih Truk Buat Trip Ini",
+      text: "1 truk boleh dipakai lebih dari 1 trip sekaligus.",
+      input: "select",
+      inputOptions,
       inputValue: trip?.truck || "",
-      inputPlaceholder: "mis. B 1234 CD",
+      inputPlaceholder: "-- pilih truk --",
       showCancelButton: true,
       confirmButtonText: "Simpan",
       cancelButtonText: "Batal",
-      didOpen: () => {
-        document.querySelectorAll(".ko-truck-quickpick").forEach((btn) => {
-          btn.addEventListener("click", () => {
-            const input = Swal.getInput();
-            if (input) input.value = btn.dataset.truck;
-          });
-        });
-      },
+      showDenyButton: Boolean(trip?.truck),
+      denyButtonText: "Lepas dari Truk",
+      denyButtonColor: "#64748b",
     });
 
-    if (!isConfirmed) return;
+    if (isDenied) {
+      setManualTrips((prev) =>
+        prev.map((t) => (t.id === tripId ? { ...t, truck: "" } : t)),
+      );
+      return;
+    }
+
+    if (!isConfirmed || !truckValue) return;
 
     setManualTrips((prev) =>
-      prev.map((t) =>
-        t.id === tripId ? { ...t, truck: (truckValue || "").trim() } : t,
-      ),
+      prev.map((t) => (t.id === tripId ? { ...t, truck: truckValue } : t)),
     );
   };
 
@@ -1217,10 +1281,22 @@ export default function TransferPlanPage() {
       .replace(/>/g, "&gt;")
       .split("\n")
       .join("<br/>");
-    const now = new Date();
-    const today = `${String(now.getDate()).padStart(2, "0")}/${String(
-      now.getMonth() + 1,
-    ).padStart(2, "0")}/${now.getFullYear()}`;
+    // TGL KIRIM / DATE di RMB harus ikut tanggal Item Request yang
+    // di-upload (bukan tanggal/jam pas user klik cetak) -- ambil dari
+    // tanggal_request item pertama di trip yang punya nilai (kalau
+    // beberapa item beda tanggal, dianggap gak wajar dan tetep pakai yang
+    // pertama ketemu). Fallback ke tanggal hari ini kalau data lama
+    // (sebelum fix ini) belum kebawa tanggal_request-nya sama sekali.
+    const formatTanggal = (val) => {
+      const d = val ? new Date(val) : new Date();
+      if (Number.isNaN(d.getTime())) return null;
+      return `${String(d.getDate()).padStart(2, "0")}/${String(
+        d.getMonth() + 1,
+      ).padStart(2, "0")}/${d.getFullYear()}`;
+    };
+    const requestTanggal = items.find((it) => it.tanggal_request)
+      ?.tanggal_request;
+    const today = formatTanggal(requestTanggal) || formatTanggal(new Date());
     const maxWeek = getCurrentWeekCode();
     const noKirimBarcodeSvg = renderNoKirimBarcodeSvg(trip.no_trip);
 
@@ -2976,13 +3052,16 @@ export default function TransferPlanPage() {
                         );
                       });
 
-                      const openPicker = () => {
+                      const openPicker = (e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setItemPickerAnchorRect(rect);
                         setItemPickerSearch("");
                         setItemPickerOpenTripId(trip.id);
                       };
                       const closePicker = () => {
                         setItemPickerOpenTripId(null);
                         setItemPickerSearch("");
+                        setItemPickerAnchorRect(null);
                       };
                       const pickItem = (itemCode) => {
                         updateAddItemForm(trip.id, "itemCode", itemCode);
@@ -3017,8 +3096,8 @@ export default function TransferPlanPage() {
                           >
                             <button
                               type="button"
-                              onClick={() =>
-                                isPickerOpen ? closePicker() : openPicker()
+                              onClick={(e) =>
+                                isPickerOpen ? closePicker() : openPicker(e)
                               }
                               style={{
                                 width: "100%",
@@ -3041,33 +3120,41 @@ export default function TransferPlanPage() {
                                 : "+ Pilih item buat ditambahin..."}
                             </button>
 
-                            {isPickerOpen && (
-                              <>
-                                {/* Overlay transparan buat nutup dropdown
-                                    pas klik di luar area list-nya. */}
-                                <div
-                                  onMouseDown={closePicker}
-                                  style={{
-                                    position: "fixed",
-                                    inset: 0,
-                                    zIndex: 9998,
-                                  }}
-                                />
-                                <div
-                                  onMouseDown={(e) => e.stopPropagation()}
-                                  style={{
-                                    position: "absolute",
-                                    top: "calc(100% + 3px)",
-                                    left: 0,
-                                    right: 0,
-                                    zIndex: 9999,
-                                    background: "#fff",
-                                    border: "1px solid #cbd5e1",
-                                    borderRadius: 6,
-                                    boxShadow: "0 8px 24px rgba(15,23,42,0.18)",
-                                    overflow: "hidden",
-                                  }}
-                                >
+                            {isPickerOpen &&
+                              itemPickerAnchorRect &&
+                              createPortal(
+                                <>
+                                  {/* Overlay transparan buat nutup dropdown
+                                      pas klik di luar area list-nya. */}
+                                  <div
+                                    onMouseDown={closePicker}
+                                    style={{
+                                      position: "fixed",
+                                      inset: 0,
+                                      zIndex: 9998,
+                                    }}
+                                  />
+                                  {/* Portal ke <body> + posisi "fixed" pakai
+                                      getBoundingClientRect tombolnya --
+                                      biar gak kepotong overflow:hidden
+                                      kartu trip pembungkus (lihat catatan
+                                      di deklarasi itemPickerAnchorRect). */}
+                                  <div
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                    style={{
+                                      position: "fixed",
+                                      top: itemPickerAnchorRect.bottom + 3,
+                                      left: itemPickerAnchorRect.left,
+                                      width: itemPickerAnchorRect.width,
+                                      zIndex: 9999,
+                                      background: "#fff",
+                                      border: "1px solid #cbd5e1",
+                                      borderRadius: 6,
+                                      boxShadow:
+                                        "0 8px 24px rgba(15,23,42,0.18)",
+                                      overflow: "hidden",
+                                    }}
+                                  >
                                   <input
                                     autoFocus
                                     type="text"
@@ -3216,8 +3303,9 @@ export default function TransferPlanPage() {
                                     })}
                                   </div>
                                 </div>
-                              </>
-                            )}
+                                </>,
+                                document.body,
+                              )}
                           </div>
 
                           <input
