@@ -82,11 +82,14 @@ router.get("/item-req/summary", TransferPlanController.itemRequestSummary);
 router.post("/trip-plan/save", TransferPlanController.saveTripPlan);
 router.get("/trip-plan/history", TransferPlanController.tripPlanHistory);
 
+// Draft Trip Plan (kerjaan yang lagi disusun, belum "Simpan Trip Plan")
+// -- biar gak hilang pas refresh / dibuka dari PC lain.
+router.get("/trip-plan/draft", TransferPlanController.getTripPlanDraft);
+router.post("/trip-plan/draft", TransferPlanController.saveTripPlanDraft);
+router.delete("/trip-plan/draft", TransferPlanController.clearTripPlanDraft);
+
 // ── Master pasangan Tire (tubetype) <-> Tube ──
-router.get(
-  "/tire-tube-pairing",
-  KarawangTireTubePairingController.list,
-);
+router.get("/tire-tube-pairing", KarawangTireTubePairingController.list);
 router.get(
   "/tire-tube-pairing/lookup",
   KarawangTireTubePairingController.lookupByTireCodes,
@@ -96,14 +99,8 @@ router.post(
   uploadItemReq.single("file"),
   KarawangTireTubePairingController.upload,
 );
-router.post(
-  "/tire-tube-pairing",
-  KarawangTireTubePairingController.create,
-);
-router.put(
-  "/tire-tube-pairing/:id",
-  KarawangTireTubePairingController.update,
-);
+router.post("/tire-tube-pairing", KarawangTireTubePairingController.create);
+router.put("/tire-tube-pairing/:id", KarawangTireTubePairingController.update);
 router.delete(
   "/tire-tube-pairing/:id",
   KarawangTireTubePairingController.remove,

@@ -4,6 +4,7 @@
 // dari bpw_dept_db.sch_oem (lihat KarawangItemRequestModel.getTireTripItems).
 const KarawangItemRequestModel = require("../../models/stok-opname-karawang/KarawangItemRequestModel");
 const KarawangTripPlanModel = require("../../models/stok-opname-karawang/KarawangTripPlanModel");
+const KarawangTripPlanDraftModel = require("../../models/stok-opname-karawang/KarawangTripPlanDraftModel");
 const ControlStockModel = require("../../models/control-stock/ControlStockModel");
 const KarawangFifoModel = require("../../models/stok-opname-karawang/KarawangFifoModel");
 const { mapWithConcurrency } = require("../../utils/concurrency");
@@ -18,7 +19,9 @@ const response = require("../../utils/response");
 // pakai kode yang udah di-strip, biar ketemu. Kode aslinya (dengan suffix)
 // tetap dipakai buat ditampilkan & disimpan ke trip.
 function stripItemSuffix(itemCode) {
-  return String(itemCode || "").trim().replace(/-\d+$/, "");
+  return String(itemCode || "")
+    .trim()
+    .replace(/-\d+$/, "");
 }
 
 class TransferPlanController {
@@ -247,7 +250,11 @@ class TransferPlanController {
       const { trips, kapasitas } = req.body || {};
 
       if (!Array.isArray(trips) || trips.length === 0) {
-        return response.error(res, "Tidak ada data Trip Plan untuk disimpan.", 422);
+        return response.error(
+          res,
+          "Tidak ada data Trip Plan untuk disimpan.",
+          422,
+        );
       }
 
       const payload = trips.map((trip, idx) => ({
@@ -255,6 +262,7 @@ class TransferPlanController {
           trip.do_number ||
           KarawangItemRequestModel.generateDoNumber(trip.trip || idx + 1),
         kapasitas: kapasitas || trip.kapasitas,
+        truck: trip.truck || null,
         items: Array.isArray(trip.items)
           ? trip.items.map((item) => ({
               item: item.item,
@@ -268,6 +276,17 @@ class TransferPlanController {
 
       const totalRows = await KarawangTripPlanModel.bulkCreate(payload);
 
+      // Trip udah final masuk histori -- draft kerja hari ini gak
+      // relevan lagi, kosongin biar refresh berikutnya mulai dari nol.
+      try {
+        await KarawangTripPlanDraftModel.clearToday();
+      } catch (err) {
+        console.error(
+          "TransferPlanController.saveTripPlan: gagal ngosongin draft:",
+          err,
+        );
+      }
+
       return response.success(res, {
         total: totalRows,
         message: `Trip Plan berhasil disimpan (${trips.length} trip, ${totalRows} baris item).`,
@@ -276,6 +295,57 @@ class TransferPlanController {
       console.error("TransferPlanController.saveTripPlan gagal:", err);
 
       return response.error(res, err.message || "Gagal menyimpan Trip Plan.");
+    }
+  }
+
+  // Ambil draft Trip Plan hari ini (kerjaan yang lagi disusun, BELUM
+  // "Simpan Trip Plan") -- dipanggil pas halaman Transfer Plan dibuka /
+  // di-refresh, dari PC manapun, biar manualTrips gak balik kosong.
+  async getTripPlanDraft(req, res) {
+    try {
+      const draft = await KarawangTripPlanDraftModel.getToday();
+
+      return response.success(res, draft || null);
+    } catch (err) {
+      console.error("TransferPlanController.getTripPlanDraft gagal:", err);
+
+      return response.error(res, "Gagal mengambil draft Trip Plan.");
+    }
+  }
+
+  // Simpan (upsert) draft Trip Plan hari ini -- dipanggil otomatis
+  // (debounced) dari frontend tiap kali manualTrips/kapasitas berubah.
+  // BUKAN "Simpan Trip Plan" final -- itu tetep lewat saveTripPlan di
+  // atas, yang abis sukses juga bakal ngosongin draft ini.
+  async saveTripPlanDraft(req, res) {
+    try {
+      const { trips, truckCapacity, catatanByTrip } = req.body || {};
+
+      await KarawangTripPlanDraftModel.saveToday({
+        trips: Array.isArray(trips) ? trips : [],
+        truckCapacity: truckCapacity ?? null,
+        catatanByTrip: catatanByTrip || {},
+      });
+
+      return response.success(res, { saved: true });
+    } catch (err) {
+      console.error("TransferPlanController.saveTripPlanDraft gagal:", err);
+
+      return response.error(res, "Gagal menyimpan draft Trip Plan.");
+    }
+  }
+
+  // Kosongin draft Trip Plan hari ini secara manual (mis. user mau mulai
+  // ulang dari nol tanpa nunggu "Simpan Trip Plan").
+  async clearTripPlanDraft(req, res) {
+    try {
+      await KarawangTripPlanDraftModel.clearToday();
+
+      return response.success(res, { cleared: true });
+    } catch (err) {
+      console.error("TransferPlanController.clearTripPlanDraft gagal:", err);
+
+      return response.error(res, "Gagal menghapus draft Trip Plan.");
     }
   }
 

@@ -8,7 +8,7 @@ const { poolUtama } = require("../../config/database");
 class KarawangTripPlanModel {
   // Simpan banyak trip sekaligus (1 kali "Buat Trip Plan" = beberapa trip,
   // tiap trip punya beberapa item) — flatten jadi banyak baris item.
-  // trips: [{ no_trip, kapasitas, items: [{ item, deskripsi, qty, volume, total_volume }] }]
+  // trips: [{ no_trip, kapasitas, truck, items: [{ item, deskripsi, qty, volume, total_volume }] }]
   static async bulkCreate(trips) {
     if (!Array.isArray(trips) || trips.length === 0) {
       return 0;
@@ -25,6 +25,7 @@ class KarawangTripPlanModel {
           trip.no_trip,
           today,
           Number(trip.kapasitas || 0),
+          trip.truck || null,
           item.item,
           item.deskripsi || null,
           Number(item.qty || 0),
@@ -38,7 +39,7 @@ class KarawangTripPlanModel {
 
     const [result] = await poolUtama.query(
       `INSERT INTO stok_opname_karawang_trip_plan
-        (no_trip, tanggal, kapasitas, item, deskripsi, qty, volume, total_volume)
+        (no_trip, tanggal, kapasitas, truck, item, deskripsi, qty, volume, total_volume)
        VALUES ?`,
       [values],
     );
@@ -88,6 +89,7 @@ class KarawangTripPlanModel {
           no_trip: row.no_trip,
           tanggal: row.tanggal,
           kapasitas: Number(row.kapasitas || 0),
+          truck: row.truck || null,
           created_at: row.created_at,
           items: [],
           total_qty: 0,
