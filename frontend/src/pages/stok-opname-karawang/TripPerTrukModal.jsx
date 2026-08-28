@@ -69,7 +69,7 @@ export default function TripPerTrukModal({ trips = [], onClose }) {
     doc.setFontSize(9);
     doc.setFont(undefined, "normal");
     doc.text(
-      `Dicetak: ${todayStr}  |  ${truckGroups.length} truk, ${filledTrips.length} trip, total ${fmtVol(totalVolumeAll)} m3`,
+      `Dicetak: ${todayStr}  |  ${truckGroups.length} truk, ${filledTrips.length} DN, total ${fmtVol(totalVolumeAll)} m3`,
       40,
       56,
     );

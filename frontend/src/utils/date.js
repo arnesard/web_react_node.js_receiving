@@ -12,12 +12,26 @@ const TZ = "Asia/Jakarta";
  */
 export function toJakartaDateString(date = new Date()) {
   const d = date instanceof Date ? date : new Date(date);
-  return new Intl.DateTimeFormat("en-CA", {
+  if (isNaN(d.getTime())) {
+    console.warn("[date.js] toJakartaDateString: invalid date input ->", date);
+    return "";
+  }
+  // NOTE: sebelumnya pakai Intl.DateTimeFormat("en-CA", ...) dan berharap
+  // hasilnya otomatis format ISO "YYYY-MM-DD". Ternyata di sebagian PC
+  // (locale/ICU data beda), locale "en-CA" fallback ke format US
+  // "M/D/YYYY" tanpa error apapun -> bikin string tanggal salah format,
+  // lalu meledak (RangeError: Invalid time value) begitu dipakai lagi di
+  // addDaysJakarta. Makanya di sini kita susun manual dari formatToParts
+  // biar hasilnya PASTI "YYYY-MM-DD" di browser/PC manapun.
+  const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: TZ,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(d);
+  }).formatToParts(d);
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+  return `${map.year}-${map.month}-${map.day}`;
 }
 
 /** Tanggal hari ini (WIB) dalam format "YYYY-MM-DD". */
@@ -37,3 +51,26 @@ export function formatDateID(date, options = {}) {
   const d = date instanceof Date ? date : new Date(date);
   return d.toLocaleDateString("id-ID", { timeZone: TZ, ...options });
 }
+
+const generateManualDoNumber = (sequence) => {
+  // Pakai tanggal Item Request yang di-upload (uploadTanggal) kalau ada
+  // -- fallback ke tanggal hari ini cuma kalau belum ada Item Request
+  // yang ke-upload sama sekali (uploadTanggal null).
+  //
+  // PENTING: ambil Y-M-D lewat toJakartaDateString (paksa zona
+  // Asia/Jakarta), JANGAN pakai .getDate()/.getMonth()/.getFullYear()
+  // langsung -- itu ngikutin timezone PC/browser masing2 user, dan
+  // ternyata ada PC yang timezone/locale-nya salah setting (lihat juga
+  // fix Dashboard blank putih sebelumnya), jadi tanggalnya bisa meleset
+  // 1 hari kalau dihitung dari local time PC itu.
+  const jakartaStr = toJakartaDateString(
+    uploadTanggal ? new Date(uploadTanggal) : new Date(),
+  );
+  const [yyyy, mm, dd] = (jakartaStr || toJakartaDateString(new Date())).split(
+    "-",
+  );
+  const yy = yyyy.slice(-2);
+  const seq = String(sequence).padStart(3, "0");
+
+  return `T-2${dd}${mm}${yy}${seq}`;
+};

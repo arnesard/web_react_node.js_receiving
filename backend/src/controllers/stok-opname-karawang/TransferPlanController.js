@@ -208,11 +208,21 @@ class TransferPlanController {
 
       const trips = KarawangItemRequestModel.buildTireTrips(items, kapasitas);
 
+      // No Trip HARUS ngikutin tanggal Item Request yang di-upload (kolom
+      // `date`), bukan tanggal hari ini server -- ambil dari item pertama
+      // yang punya tanggal_request (semua item dari batch upload yang sama
+      // seharusnya punya tanggal yang sama).
+      const uploadTanggal =
+        items.find((it) => it.tanggal_request)?.tanggal_request || null;
+
       // No Trip / do_number di-generate on-the-fly, urutan 1..N ngikutin
       // urutan trip hasil bin-packing (bukan disimpan ke DB).
       trips.forEach((trip, idx) => {
         trip.trip = idx + 1;
-        trip.do_number = KarawangItemRequestModel.generateDoNumber(idx + 1);
+        trip.do_number = KarawangItemRequestModel.generateDoNumber(
+          idx + 1,
+          uploadTanggal,
+        );
       });
 
       const totalRequest = items.reduce(

@@ -63,6 +63,7 @@ import TireTubePairingModal from "./TireTubePairingModal";
 import TripPerTrukModal from "./TripPerTrukModal";
 import { karawangStyles } from "./karawangStyles";
 import * as XLSX from "xlsx-js-style";
+import { toJakartaDateString } from "../../utils/date";
 
 export default function TransferPlanPage() {
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -110,9 +111,24 @@ export default function TransferPlanPage() {
   const [draftReady, setDraftReady] = useState(false);
   const [loadingPreview, setLoadingPreview] = useState(false);
 
+  // Tanggal Item Request yang di-upload (kolom `date` di tabel
+  // stok_opname_karawang_item_req, ikut di-bawa tiap item lewat
+  // `tanggal_request` -- lihat KarawangItemRequestModel). No Trip HARUS
+  // ngikut tanggal ini, BUKAN tanggal hari ini device user, biar nomor
+  // trip tetep konsisten sama tanggal Item Request-nya walau Trip Plan-nya
+  // baru disusun/dibuka beberapa hari setelah upload.
+  const uploadTanggal = useMemo(() => {
+    const found = previewItems.find((it) => it.tanggal_request);
+    return found?.tanggal_request || null;
+  }, [previewItems]);
+
   // ============ MANUAL TRIP BUILDER ============
   // manualTrips: [{ id, no_trip, items: [{item, deskripsi, qty, volume, total_volume}] }]
   const [manualTrips, setManualTrips] = useState([]);
+  // Jumlah slot "Truk N" yang PERNAH dibuat (cuma naik, gak pernah turun
+  // walau ada trip yang "Lepas dari Truk"). Dipakai biar Truk 2 misalnya
+  // gak ilang selamanya dari pilihan cuma gara-gara lagi gak dipake.
+  const [maxTruckSlot, setMaxTruckSlot] = useState(1);
   // Loading state khusus tombol "Rencana Transfer" (auto-generate trip).
   const [loadingRencanaTransfer, setLoadingRencanaTransfer] = useState(false);
   // Kapasitas 1 truk (m³) — dipakai buat ngecek trip udah "muat" apa belum.
@@ -120,21 +136,13 @@ export default function TransferPlanPage() {
   const [truckCapacity, setTruckCapacity] = useState(52);
   // Form "Tambah Item" per kartu trip — { [tripId]: { itemCode, qty } }.
   const [addItemForm, setAddItemForm] = useState({});
-  // Dropdown custom buat "Tambah Item" (bukan <select> native) -- dipakai
-  // biar tiap baris item bisa ditampilin dgn warna (mis. "Sisa" merah),
-  // yang gak bisa dilakuin kalau pake <select><option> browser biasa.
-  // itemPickerOpenTripId: id trip yang lagi kebuka dropdown item-nya
+  // Modal custom buat "Tambah Item" (bukan dropdown nempel di tombol lagi)
+  // -- dipakai biar tiap baris item bisa ditampilin dgn warna (mis. "Sisa"
+  // merah), yang gak bisa dilakuin kalau pake <select><option> browser
+  // biasa. itemPickerOpenTripId: id trip yang lagi kebuka modal item-nya
   // (cuma 1 yang kebuka dalam satu waktu). itemPickerSearch: teks filter.
   const [itemPickerOpenTripId, setItemPickerOpenTripId] = useState(null);
   const [itemPickerSearch, setItemPickerSearch] = useState("");
-  // Posisi dropdown item picker dipindah render-nya lewat portal ke
-  // <body> (lihat itemPickerAnchorRect) -- soalnya kartu trip pembungkus
-  // dropdown ini pakai `overflow:hidden` (buat mbulet-in sudut header),
-  // jadi kalau dropdown-nya position:absolute biasa di dalam situ,
-  // bagian yang nongol keluar batas kartu kepotong / gak kelihatan sama
-  // sekali. Portal + posisi fixed dari getBoundingClientRect nge-skip
-  // masalah itu total.
-  const [itemPickerAnchorRect, setItemPickerAnchorRect] = useState(null);
 
   // ============ HISTORI TRIP PLAN (Filter Riwayat) ============
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -327,8 +335,8 @@ export default function TransferPlanPage() {
           0,
       ),
       tanggal_request:
-        previewItems.find((i) => i.item === pair.tube_code)
-          ?.tanggal_request || null,
+        previewItems.find((i) => i.item === pair.tube_code)?.tanggal_request ||
+        null,
       // Tube-type: tire + tube pasangannya SELALU BPW1 (lihat
       // effectiveGedung). Field ini masih editable manual lewat tombol
       // Edit Gedung per item di kartu trip kalau ternyata beda.
@@ -992,10 +1000,23 @@ export default function TransferPlanPage() {
   };
 
   const generateManualDoNumber = (sequence) => {
-    const now = new Date();
-    const dd = String(now.getDate()).padStart(2, "0");
-    const mm = String(now.getMonth() + 1).padStart(2, "0");
-    const yy = String(now.getFullYear()).slice(-2);
+    // Pakai tanggal Item Request yang di-upload (uploadTanggal) kalau ada
+    // -- fallback ke tanggal hari ini cuma kalau belum ada Item Request
+    // yang ke-upload sama sekali (uploadTanggal null).
+    //
+    // PENTING: ambil Y-M-D lewat toJakartaDateString (paksa zona
+    // Asia/Jakarta), JANGAN pakai .getDate()/.getMonth()/.getFullYear()
+    // langsung -- itu ngikutin timezone PC/browser masing2 user, dan
+    // ternyata ada PC yang timezone/locale-nya salah setting (lihat juga
+    // fix Dashboard blank putih sebelumnya), jadi tanggalnya bisa meleset
+    // 1 hari kalau dihitung dari local time PC itu.
+    const jakartaStr = toJakartaDateString(
+      uploadTanggal ? new Date(uploadTanggal) : new Date(),
+    );
+    const [yyyy, mm, dd] = (
+      jakartaStr || toJakartaDateString(new Date())
+    ).split("-");
+    const yy = yyyy.slice(-2);
     const seq = String(sequence).padStart(3, "0");
 
     return `T-2${dd}${mm}${yy}${seq}`;
@@ -1083,13 +1104,27 @@ export default function TransferPlanPage() {
       ),
     ).sort((a, b) => a - b);
 
-    const nextTruckNumber =
-      (usedTruckNumbers.length ? Math.max(...usedTruckNumbers) : 0) + 1;
+    // Slot maksimal PERNAH dibuka sejauh ini (persisten, gak reset walau
+    // di-"Lepas dari Truk") -- dipakai biar Truk 2 dkk gak ilang dari
+    // pilihan cuma gara-gara lagi gak dipake trip manapun.
+    const effectiveMaxSlot = Math.max(
+      maxTruckSlot,
+      usedTruckNumbers.length ? Math.max(...usedTruckNumbers) : 0,
+    );
+    const nextTruckNumber = effectiveMaxSlot + 1;
 
-    // Opsi = truk yang udah dipake trip lain + 1 slot truk baru berikutnya,
-    // minimal selalu ada "Truk 1".
+    if (effectiveMaxSlot > maxTruckSlot) {
+      setMaxTruckSlot(effectiveMaxSlot);
+    }
+
+    // Opsi = semua slot truk yang pernah dibuka (1..effectiveMaxSlot) + 1
+    // slot truk baru berikutnya, minimal selalu ada "Truk 1".
     const optionNumbers = Array.from(
-      new Set([...usedTruckNumbers, nextTruckNumber, 1]),
+      new Set([
+        ...Array.from({ length: effectiveMaxSlot }, (_, i) => i + 1),
+        nextTruckNumber,
+        1,
+      ]),
     ).sort((a, b) => a - b);
 
     const inputOptions = optionNumbers.reduce((acc, n) => {
@@ -1103,7 +1138,11 @@ export default function TransferPlanPage() {
       return acc;
     }, {});
 
-    const { value: truckValue, isConfirmed, isDenied } = await Swal.fire({
+    const {
+      value: truckValue,
+      isConfirmed,
+      isDenied,
+    } = await Swal.fire({
       title: "Pilih Truk Buat Trip Ini",
       text: "1 truk boleh dipakai lebih dari 1 trip sekaligus.",
       input: "select",
@@ -1294,8 +1333,9 @@ export default function TransferPlanPage() {
         d.getMonth() + 1,
       ).padStart(2, "0")}/${d.getFullYear()}`;
     };
-    const requestTanggal = items.find((it) => it.tanggal_request)
-      ?.tanggal_request;
+    const requestTanggal = items.find(
+      (it) => it.tanggal_request,
+    )?.tanggal_request;
     const today = formatTanggal(requestTanggal) || formatTanggal(new Date());
     const maxWeek = getCurrentWeekCode();
     const noKirimBarcodeSvg = renderNoKirimBarcodeSvg(trip.no_trip);
@@ -1599,6 +1639,7 @@ export default function TransferPlanPage() {
       });
 
       setManualTrips([]);
+      setMaxTruckSlot(1);
 
       await Promise.all([loadSummaryItemReq(), loadPreview()]);
     } catch (err) {
@@ -1650,6 +1691,7 @@ export default function TransferPlanPage() {
     if (!result.isConfirmed) return;
 
     setManualTrips([]);
+    setMaxTruckSlot(1);
 
     Swal.fire({
       title: "Trip Berhasil Direset",
@@ -3052,16 +3094,13 @@ export default function TransferPlanPage() {
                         );
                       });
 
-                      const openPicker = (e) => {
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        setItemPickerAnchorRect(rect);
+                      const openPicker = () => {
                         setItemPickerSearch("");
                         setItemPickerOpenTripId(trip.id);
                       };
                       const closePicker = () => {
                         setItemPickerOpenTripId(null);
                         setItemPickerSearch("");
-                        setItemPickerAnchorRect(null);
                       };
                       const pickItem = (itemCode) => {
                         updateAddItemForm(trip.id, "itemCode", itemCode);
@@ -3083,7 +3122,7 @@ export default function TransferPlanPage() {
                                 : "none",
                           }}
                         >
-                          {/* ===== DROPDOWN CUSTOM (bukan <select> native) =====
+                          {/* ===== TOMBOL PEMBUKA MODAL (bukan <select> native) =====
                               Dipakai biar tiap baris item bisa ditampilin
                               dgn warna (Sisa merah kalau abis/minus, dll),
                               yang gak mungkin dilakuin pake <option> biasa. */}
@@ -3096,9 +3135,7 @@ export default function TransferPlanPage() {
                           >
                             <button
                               type="button"
-                              onClick={(e) =>
-                                isPickerOpen ? closePicker() : openPicker(e)
-                              }
+                              onClick={openPicker}
                               style={{
                                 width: "100%",
                                 textAlign: "left",
@@ -3121,189 +3158,233 @@ export default function TransferPlanPage() {
                             </button>
 
                             {isPickerOpen &&
-                              itemPickerAnchorRect &&
                               createPortal(
-                                <>
-                                  {/* Overlay transparan buat nutup dropdown
-                                      pas klik di luar area list-nya. */}
-                                  <div
-                                    onMouseDown={closePicker}
-                                    style={{
-                                      position: "fixed",
-                                      inset: 0,
-                                      zIndex: 9998,
-                                    }}
-                                  />
-                                  {/* Portal ke <body> + posisi "fixed" pakai
-                                      getBoundingClientRect tombolnya --
-                                      biar gak kepotong overflow:hidden
-                                      kartu trip pembungkus (lihat catatan
-                                      di deklarasi itemPickerAnchorRect). */}
+                                <div
+                                  onMouseDown={closePicker}
+                                  style={{
+                                    position: "fixed",
+                                    inset: 0,
+                                    background: "rgba(15, 23, 42, 0.55)",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    zIndex: 9999,
+                                    padding: 16,
+                                  }}
+                                >
+                                  {/* Kotak modal-nya, di tengah layar. */}
                                   <div
                                     onMouseDown={(e) => e.stopPropagation()}
                                     style={{
-                                      position: "fixed",
-                                      top: itemPickerAnchorRect.bottom + 3,
-                                      left: itemPickerAnchorRect.left,
-                                      width: itemPickerAnchorRect.width,
-                                      zIndex: 9999,
+                                      width: "100%",
+                                      maxWidth: 640,
+                                      maxHeight: "85vh",
+                                      display: "flex",
+                                      flexDirection: "column",
                                       background: "#fff",
                                       border: "1px solid #cbd5e1",
-                                      borderRadius: 6,
+                                      borderRadius: 10,
                                       boxShadow:
-                                        "0 8px 24px rgba(15,23,42,0.18)",
+                                        "0 12px 32px rgba(15,23,42,0.28)",
                                       overflow: "hidden",
                                     }}
                                   >
-                                  <input
-                                    autoFocus
-                                    type="text"
-                                    value={itemPickerSearch}
-                                    onChange={(e) =>
-                                      setItemPickerSearch(e.target.value)
-                                    }
-                                    placeholder="Cari kode / deskripsi item..."
-                                    style={{
-                                      width: "100%",
-                                      boxSizing: "border-box",
-                                      padding: "5px 7px",
-                                      border: "none",
-                                      borderBottom: "1px solid #e2e8f0",
-                                      fontSize: 9.5,
-                                      outline: "none",
-                                    }}
-                                  />
-
-                                  <div
-                                    style={{
-                                      maxHeight: 260,
-                                      overflowY: "auto",
-                                    }}
-                                  >
-                                    {filteredItems.length === 0 && (
+                                    <div
+                                      style={{
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "space-between",
+                                        padding: "14px 16px",
+                                        borderBottom: "1px solid #e2e8f0",
+                                        flexShrink: 0,
+                                      }}
+                                    >
                                       <div
                                         style={{
-                                          padding: "8px 7px",
-                                          fontSize: 9.5,
-                                          color: "#94a3b8",
-                                          fontStyle: "italic",
+                                          fontSize: 16,
+                                          fontWeight: 700,
+                                          color: "#0f172a",
                                         }}
                                       >
-                                        Gak ada item yang cocok.
+                                        Pilih Item Buat Ditambahin
                                       </div>
-                                    )}
+                                      <button
+                                        type="button"
+                                        onClick={closePicker}
+                                        style={{
+                                          border: "none",
+                                          background: "transparent",
+                                          cursor: "pointer",
+                                          color: "#64748b",
+                                          display: "flex",
+                                          alignItems: "center",
+                                          padding: 4,
+                                        }}
+                                      >
+                                        <X size={20} />
+                                      </button>
+                                    </div>
 
-                                    {filteredItems.map((it) => {
-                                      const allocated = Number(
-                                        allocatedQtyMap[it.item] || 0,
-                                      );
-                                      const sisa =
-                                        Number(it.qty || 0) - allocated;
-                                      const sisaColor =
-                                        sisa <= 0 ? "#dc2626" : "#0f172a";
+                                    <input
+                                      autoFocus
+                                      type="text"
+                                      value={itemPickerSearch}
+                                      onChange={(e) =>
+                                        setItemPickerSearch(e.target.value)
+                                      }
+                                      placeholder="Cari kode / deskripsi item..."
+                                      style={{
+                                        width: "100%",
+                                        boxSizing: "border-box",
+                                        padding: "12px 16px",
+                                        border: "none",
+                                        borderBottom: "1px solid #e2e8f0",
+                                        fontSize: 14,
+                                        outline: "none",
+                                        flexShrink: 0,
+                                      }}
+                                    />
 
-                                      return (
+                                    <div
+                                      style={{
+                                        overflowY: "auto",
+                                        flex: 1,
+                                      }}
+                                    >
+                                      {filteredItems.length === 0 && (
                                         <div
-                                          key={it.item}
-                                          onClick={() => pickItem(it.item)}
                                           style={{
-                                            padding: "5px 7px",
-                                            cursor: "pointer",
-                                            borderBottom: "1px solid #f1f5f9",
-                                            background:
-                                              it.item === selectedItemCode
-                                                ? "#eff6ff"
-                                                : "#fff",
-                                          }}
-                                          onMouseEnter={(e) => {
-                                            e.currentTarget.style.background =
-                                              "#f8fafc";
-                                          }}
-                                          onMouseLeave={(e) => {
-                                            e.currentTarget.style.background =
-                                              it.item === selectedItemCode
-                                                ? "#eff6ff"
-                                                : "#fff";
+                                            padding: "16px",
+                                            fontSize: 13,
+                                            color: "#94a3b8",
+                                            fontStyle: "italic",
                                           }}
                                         >
-                                          <div
-                                            style={{
-                                              fontSize: 9.5,
-                                              fontWeight: 700,
-                                              color: "#334155",
-                                              whiteSpace: "nowrap",
-                                              overflow: "hidden",
-                                              textOverflow: "ellipsis",
-                                            }}
-                                          >
-                                            {it.item} — {it.deskripsi || "-"}
-                                          </div>
-                                          <div
-                                            className="ko-mono"
-                                            style={{
-                                              marginTop: 2,
-                                              display: "flex",
-                                              flexWrap: "wrap",
-                                              gap: 6,
-                                              fontSize: 8.5,
-                                            }}
-                                          >
-                                            <span style={{ color: "#64748b" }}>
-                                              Req:{" "}
-                                              <b style={{ color: "#334155" }}>
-                                                {Number(
-                                                  it.qty || 0,
-                                                ).toLocaleString("id-ID")}
-                                              </b>
-                                            </span>
-                                            <span style={{ color: "#64748b" }}>
-                                              Masuk Trip:{" "}
-                                              <b
-                                                style={{
-                                                  color:
-                                                    allocated > 0
-                                                      ? "#2563eb"
-                                                      : "#94a3b8",
-                                                }}
-                                              >
-                                                {allocated.toLocaleString(
-                                                  "id-ID",
-                                                )}
-                                              </b>
-                                            </span>
-                                            <span style={{ color: "#64748b" }}>
-                                              Sisa:{" "}
-                                              <b style={{ color: sisaColor }}>
-                                                {sisa.toLocaleString("id-ID")}
-                                              </b>
-                                            </span>
-                                            <span style={{ color: "#64748b" }}>
-                                              Gedung:{" "}
-                                              <b
-                                                style={{
-                                                  color: it.gedung
-                                                    ? "#2563eb"
-                                                    : "#dc2626",
-                                                }}
-                                              >
-                                                {it.gedung || "?"}
-                                              </b>
-                                            </span>
-                                            <span style={{ color: "#64748b" }}>
-                                              Stok TGR:{" "}
-                                              <b style={{ color: "#475569" }}>
-                                                {Number(
-                                                  it.stok_tangerang || 0,
-                                                ).toLocaleString("id-ID")}
-                                              </b>
-                                            </span>
-                                          </div>
+                                          Gak ada item yang cocok.
                                         </div>
-                                      );
-                                    })}
+                                      )}
+
+                                      {filteredItems.map((it) => {
+                                        const allocated = Number(
+                                          allocatedQtyMap[it.item] || 0,
+                                        );
+                                        const sisa =
+                                          Number(it.qty || 0) - allocated;
+                                        const sisaColor =
+                                          sisa <= 0 ? "#dc2626" : "#0f172a";
+
+                                        return (
+                                          <div
+                                            key={it.item}
+                                            onClick={() => pickItem(it.item)}
+                                            style={{
+                                              padding: "12px 16px",
+                                              cursor: "pointer",
+                                              borderBottom: "1px solid #f1f5f9",
+                                              background:
+                                                it.item === selectedItemCode
+                                                  ? "#eff6ff"
+                                                  : "#fff",
+                                            }}
+                                            onMouseEnter={(e) => {
+                                              e.currentTarget.style.background =
+                                                "#f8fafc";
+                                            }}
+                                            onMouseLeave={(e) => {
+                                              e.currentTarget.style.background =
+                                                it.item === selectedItemCode
+                                                  ? "#eff6ff"
+                                                  : "#fff";
+                                            }}
+                                          >
+                                            <div
+                                              style={{
+                                                fontSize: 14,
+                                                fontWeight: 700,
+                                                color: "#334155",
+                                                whiteSpace: "nowrap",
+                                                overflow: "hidden",
+                                                textOverflow: "ellipsis",
+                                              }}
+                                            >
+                                              {it.item} — {it.deskripsi || "-"}
+                                            </div>
+                                            <div
+                                              className="ko-mono"
+                                              style={{
+                                                marginTop: 4,
+                                                display: "flex",
+                                                flexWrap: "wrap",
+                                                gap: 10,
+                                                fontSize: 12,
+                                              }}
+                                            >
+                                              <span
+                                                style={{ color: "#64748b" }}
+                                              >
+                                                Req:{" "}
+                                                <b style={{ color: "#334155" }}>
+                                                  {Number(
+                                                    it.qty || 0,
+                                                  ).toLocaleString("id-ID")}
+                                                </b>
+                                              </span>
+                                              <span
+                                                style={{ color: "#64748b" }}
+                                              >
+                                                Masuk Trip:{" "}
+                                                <b
+                                                  style={{
+                                                    color:
+                                                      allocated > 0
+                                                        ? "#2563eb"
+                                                        : "#94a3b8",
+                                                  }}
+                                                >
+                                                  {allocated.toLocaleString(
+                                                    "id-ID",
+                                                  )}
+                                                </b>
+                                              </span>
+                                              <span
+                                                style={{ color: "#64748b" }}
+                                              >
+                                                Sisa:{" "}
+                                                <b style={{ color: sisaColor }}>
+                                                  {sisa.toLocaleString("id-ID")}
+                                                </b>
+                                              </span>
+                                              <span
+                                                style={{ color: "#64748b" }}
+                                              >
+                                                Gedung:{" "}
+                                                <b
+                                                  style={{
+                                                    color: it.gedung
+                                                      ? "#2563eb"
+                                                      : "#dc2626",
+                                                  }}
+                                                >
+                                                  {it.gedung || "?"}
+                                                </b>
+                                              </span>
+                                              <span
+                                                style={{ color: "#64748b" }}
+                                              >
+                                                Stok TGR:{" "}
+                                                <b style={{ color: "#475569" }}>
+                                                  {Number(
+                                                    it.stok_tangerang || 0,
+                                                  ).toLocaleString("id-ID")}
+                                                </b>
+                                              </span>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
                                   </div>
-                                </div>
-                                </>,
+                                </div>,
                                 document.body,
                               )}
                           </div>

@@ -258,9 +258,12 @@ class KarawangItemReqModel {
 
   // No Trip / do_number generate on-the-fly (gak disimpan ke DB), format
   // sama kayak pola do_number Cross Docking: T-2 + tanggal DDMMYY + urutan
-  // 3 digit (001, 002, dst), reset tiap hari & tiap kali halaman dibuka.
-  static generateDoNumber(sequence) {
-    const now = new Date();
+  // 3 digit (001, 002, dst). `baseDate` opsional = tanggal Item Request
+  // yang di-upload (kolom `date`); kalau gak dikasih, fallback ke tanggal
+  // hari ini server.
+  static generateDoNumber(sequence, baseDate = null) {
+    const parsed = baseDate ? new Date(baseDate) : new Date();
+    const now = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
     const dd = String(now.getDate()).padStart(2, "0");
     const mm = String(now.getMonth() + 1).padStart(2, "0");
     const yy = String(now.getFullYear()).slice(-2);
