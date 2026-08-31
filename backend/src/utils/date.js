@@ -58,10 +58,27 @@ function quarantineCutoffToday() {
   return new Date(`${todayJakarta()}T12:00:00+07:00`);
 }
 
+/**
+ * Umur dalam HARI dari sebuah timestamp (mis. field `lastupdated` dari
+ * Cross Docking) sampai SEKARANG — dipakai buat kolom "Age KRW" (berapa
+ * lama item itu udah ada di Karawang menurut lastupdate-nya). Dihitung
+ * dari selisih instant absolut (bukan selisih tanggal kalender WIB),
+ * dibulatkan ke bawah: lastupdate 29/08 19:00:59 vs sekarang 31/08
+ * 19:00:59 = 2 hari persis. Balikin null kalau tanggalnya gak valid/kosong.
+ */
+function daysSinceJakarta(dateInput) {
+  if (!dateInput) return null;
+  const d = dateInput instanceof Date ? dateInput : new Date(dateInput);
+  if (Number.isNaN(d.getTime())) return null;
+  const diffMs = Date.now() - d.getTime();
+  return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+}
+
 module.exports = {
   toJakartaDateString,
   todayJakarta,
   addDaysJakarta,
   currentHourJakarta,
   quarantineCutoffToday,
+  daysSinceJakarta,
 };

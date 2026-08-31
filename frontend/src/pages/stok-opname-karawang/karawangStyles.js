@@ -234,6 +234,8 @@ export const karawangStyles = `
     vertical-align: top; }
   .ko-data-table tr:last-child td { border-bottom: none; }
   .ko-data-table tbody tr:hover { background: #f8fafc; }
+  .ko-cd-row-clickable { cursor: pointer; }
+  .ko-cd-row-clickable:hover { background: #eef2ff; }
   /* Versi compact khusus tabel item di dalam card Trip Manual */
   .ko-trip-table { min-width: 560px; font-size: 9.5px; }
   .ko-trip-table th { padding: 4px 6px; font-size: 8.5px; }

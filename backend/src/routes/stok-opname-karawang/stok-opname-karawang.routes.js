@@ -57,6 +57,9 @@ router.get(
   "/cross-docking/detail-all-export",
   CrossDockingController.detailAllExport,
 );
+// Detail per rackcode+item — dipakai modal pas baris di tabel Ringkasan
+// Stock diklik (lihat CrossDockingController.detail).
+router.get("/cross-docking/detail", CrossDockingController.detail);
 
 // ── Control FIFO: search item (kode/deskripsi) → semua lot Cross
 // Docking tempat item itu berada, diurut week paling tua duluan ──

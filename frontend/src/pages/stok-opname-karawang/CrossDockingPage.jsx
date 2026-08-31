@@ -68,6 +68,53 @@ function formatCellValue(value) {
   return String(value);
 }
 
+// Field lastupdated dari Cross Docking ditampilin apa adanya (dd/mm/yyyy,
+// hh.mm.ss) biar konsisten sama gaya tampilan tanggal di web sumbernya.
+function formatDateTime(value) {
+  if (!value) return "-";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  const datePart = d.toLocaleDateString("id-ID", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+  const timePart = d.toLocaleTimeString("id-ID", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  return `${datePart}, ${timePart}`;
+}
+
+// Age KRW = udah berapa hari item itu di Karawang, dihitung dari selisih
+// lastupdated ke waktu sekarang (dibulatkan ke bawah). Server (endpoint
+// /cross-docking/detail) udah ngirim field age_krw jadi ini cuma fallback
+// kalau field itu belum ada.
+function computeAgeKrw(lastupdated) {
+  if (!lastupdated) return null;
+  const d = new Date(lastupdated);
+  if (Number.isNaN(d.getTime())) return null;
+  const diffMs = Date.now() - d.getTime();
+  return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+}
+
+// Kolom "Last Update" + "Age KRW" dipatok muncul TEPAT SETELAH "Loccode" di
+// tabel Ringkasan Stock (dalam urutan itu), walaupun urutan aslinya (posisi
+// key pertama kali muncul di data) naro-nya di paling belakang (field ini
+// ditempelin belakangan lewat enrichSummaryWithLastUpdate, bukan dari API
+// summary aslinya).
+function reorderLastUpdateAfterLoccode(columns) {
+  const extra = ["lastupdate", "age_krw"].filter((c) => columns.includes(c));
+  if (!extra.length) return columns;
+  const withoutExtra = columns.filter((c) => !extra.includes(c));
+  const idxLoccode = withoutExtra.indexOf("loccode");
+  if (idxLoccode === -1) return columns; // gak ada loccode, biarin apa adanya
+  const result = [...withoutExtra];
+  result.splice(idxLoccode + 1, 0, ...extra);
+  return result;
+}
+
 // Union kolom dari beberapa baris pertama (bukan cuma baris pertama),
 // jaga-jaga kalau baris awal kebetulan gak punya semua field.
 function collectColumns(rows, sampleSize = 30) {
@@ -230,13 +277,13 @@ function printRows(rows, title) {
   };
 }
 
-function DynamicTable({ rows, emptyMessage }) {
+function DynamicTable({ rows, emptyMessage, onRowClick }) {
   if (!rows || rows.length === 0) {
     return <div className="ko-empty">{emptyMessage}</div>;
   }
   const truncated = rows.length > MAX_TABLE_RENDER_ROWS;
   const visibleRows = truncated ? rows.slice(0, MAX_TABLE_RENDER_ROWS) : rows;
-  const columns = collectColumns(visibleRows);
+  const columns = reorderLastUpdateAfterLoccode(collectColumns(visibleRows));
   return (
     <>
       {truncated && (
@@ -251,21 +298,39 @@ function DynamicTable({ rows, emptyMessage }) {
           <thead>
             <tr>
               {columns.map((col) => (
-                <th key={col}>{humanizeKey(col)}</th>
+                <th key={col}>
+                  {col === "lastupdate"
+                    ? "Last Update"
+                    : col === "age_krw"
+                      ? "Age KRW"
+                      : humanizeKey(col)}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
             {visibleRows.map((row, idx) => (
-              <tr key={idx}>
+              <tr
+                key={idx}
+                className={onRowClick ? "ko-cd-row-clickable" : undefined}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+              >
                 {columns.map((col) => (
                   <td
                     key={col}
                     className={
-                      typeof row[col] === "number" ? "ko-mono" : undefined
+                      typeof row[col] === "number" || col === "age_krw"
+                        ? "ko-mono"
+                        : undefined
                     }
                   >
-                    {formatCellValue(row[col])}
+                    {col === "lastupdate"
+                      ? formatDateTime(row[col])
+                      : col === "age_krw"
+                        ? row[col] === null || row[col] === undefined
+                          ? "-"
+                          : `${Number(row[col]).toLocaleString("id-ID")} hari`
+                        : formatCellValue(row[col])}
                   </td>
                 ))}
               </tr>
@@ -396,6 +461,112 @@ function DetailAllModal({
   );
 }
 
+// Kolom modal detail per-baris (RACKCODE/ITEM), dibuka pas user klik salah
+// satu baris tabel Ringkasan Stock. Struktur mirip DETAIL_ALL_COLUMNS,
+// tapi field-nya dipatok sesuai yang diminta: Rackcode, Item, Curweek,
+// Collie, Barcode, Last Update, Age KRW.
+const ROW_DETAIL_COLUMNS = [
+  { key: "rackcode", label: "Rackcode" },
+  { key: "item", label: "Item" },
+  { key: "curweek", label: "Cur Week" },
+  { key: "bc_collie", label: "Collie" },
+  { key: "barcode", label: "Barcode" },
+  { key: "lastupdated", label: "Last Update" },
+  { key: "age_krw", label: "Age KRW" },
+];
+
+// Modal "Detail: RACKCODE / ITEM" — popup pas salah satu baris di tabel
+// Ringkasan Stock diklik. Beda dari DetailAllModal: datanya per SATU
+// pasangan rackcode+item (bukan semua rack sekaligus), dan nampilin Age
+// KRW = umur item itu di Karawang (hari) dihitung dari lastupdated.
+function RowDetailModal({ pair, rows, loading, error, onClose }) {
+  const showTable = rows !== null && rows.length > 0;
+  return (
+    <div className="ko-cd-modal-backdrop" onClick={onClose}>
+      <div className="ko-cd-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="ko-cd-modal-header">
+          <h2>
+            Detail: {pair?.rackcode} / {pair?.item}
+          </h2>
+          <button
+            type="button"
+            className="ko-cd-modal-close"
+            onClick={onClose}
+            aria-label="Tutup"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="ko-cd-modal-body">
+          {loading && (
+            <div className="ko-empty">
+              <Loader2 size={20} className="ko-spin" /> Memuat detail...
+            </div>
+          )}
+
+          {!loading && error && <div className="ko-cd-error">{error}</div>}
+
+          {!loading && !error && !showTable && (
+            <div className="ko-empty">Tidak ada data detail.</div>
+          )}
+
+          {!loading && !error && showTable && (
+            <div className="ko-cd-modal-table-scroll">
+              <table className="ko-data-table">
+                <thead>
+                  <tr>
+                    {ROW_DETAIL_COLUMNS.map((col) => (
+                      <th key={col.key}>{col.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, idx) => (
+                    <tr key={idx}>
+                      {ROW_DETAIL_COLUMNS.map((col) => {
+                        if (col.key === "lastupdated") {
+                          return (
+                            <td key={col.key}>
+                              {formatDateTime(row.lastupdated)}
+                            </td>
+                          );
+                        }
+                        if (col.key === "age_krw") {
+                          const age =
+                            row.age_krw ?? computeAgeKrw(row.lastupdated);
+                          return (
+                            <td key={col.key} className="ko-mono">
+                              {age === null || age === undefined
+                                ? "-"
+                                : `${age.toLocaleString("id-ID")} hari`}
+                            </td>
+                          );
+                        }
+                        const value = row[col.key];
+                        return (
+                          <td
+                            key={col.key}
+                            className={
+                              typeof value === "number" ? "ko-mono" : undefined
+                            }
+                          >
+                            {formatCellValue(value)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatsGrid({ totals }) {
   if (!totals) return null;
   const entries = Object.entries(totals).filter(
@@ -442,6 +613,13 @@ export default function CrossDockingPage() {
   const [detailNote, setDetailNote] = useState(""); // info non-fatal, mis. Bc Collie dilewati
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [exportingCsv, setExportingCsv] = useState(false);
+
+  // Modal detail per-baris (rackcode+item), dibuka pas baris tabel
+  // Ringkasan Stock diklik.
+  const [rowDetailPair, setRowDetailPair] = useState(null); // { rackcode, item } | null
+  const [rowDetailRows, setRowDetailRows] = useState(null);
+  const [rowDetailLoading, setRowDetailLoading] = useState(false);
+  const [rowDetailError, setRowDetailError] = useState("");
 
   const setFilterField = (key) => (e) =>
     setFilters((prev) => ({ ...prev, [key]: e.target.value }));
@@ -521,6 +699,32 @@ export default function CrossDockingPage() {
       );
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  // Klik baris di tabel Ringkasan Stock -> buka modal detail per
+  // rackcode+item (rackcode, item, curweek, collie, barcode, last update,
+  // age krw). Data ditarik on-demand (bukan sekaligus buat semua baris)
+  // biar ringan.
+  const handleRowClick = async (row) => {
+    const rackcode = getFieldValue(row, "rackcode");
+    const item = getFieldValue(row, "item");
+    if (!rackcode || !item) return;
+    setRowDetailPair({ rackcode, item });
+    setRowDetailRows(null);
+    setRowDetailError("");
+    setRowDetailLoading(true);
+    try {
+      const res = await api.get("/stok-opname-karawang/cross-docking/detail", {
+        params: { rackcode, item },
+      });
+      setRowDetailRows(res.data?.data || []);
+    } catch (err) {
+      setRowDetailError(
+        err.response?.data?.message || "Gagal mengambil data detail.",
+      );
+    } finally {
+      setRowDetailLoading(false);
     }
   };
 
@@ -772,6 +976,7 @@ export default function CrossDockingPage() {
             <DynamicTable
               rows={summaryRows}
               emptyMessage="Tidak ada data summary."
+              onRowClick={handleRowClick}
             />
           </div>
         </>
@@ -785,6 +990,16 @@ export default function CrossDockingPage() {
           exporting={exportingCsv}
           onClose={() => setShowDetailModal(false)}
           onExportCsv={handleExportDetailAllCsv}
+        />
+      )}
+
+      {rowDetailPair && (
+        <RowDetailModal
+          pair={rowDetailPair}
+          rows={rowDetailRows}
+          loading={rowDetailLoading}
+          error={rowDetailError}
+          onClose={() => setRowDetailPair(null)}
         />
       )}
     </div>

@@ -19,6 +19,7 @@
 const CrossDockingClient = require("../services/crossDockingClient");
 const { getField } = require("./apiField");
 const { mapWithConcurrency } = require("./concurrency");
+const { daysSinceJakarta } = require("./date");
 
 async function enrichWithBcCollie(
   rows,
@@ -116,4 +117,94 @@ async function enrichWithBcCollie(
   };
 }
 
-module.exports = { enrichWithBcCollie };
+// Versi khusus buat baris SUMMARY (per rackcode+item, sudah teragregasi —
+// gak ada barcode per baris kayak Detail All). "Last Update" 1 baris summary
+// diambil dari lastupdated PALING BARU di antara semua pcs rackcode+item itu
+// menurut /stock-cd/detail. Dibatasi maxPairs (default lebih kecil dari
+// export, karena ini dipanggil pas tabel web dimuat, bukan aksi yang user
+// sengaja tunggu) — kalau kombinasi rackcode+item pada hasil summary
+// kebanyakan, kolom "Last Update" dilewati (row tetap tampil tanpa field itu)
+// biar server Cross Docking sumbernya gak kebebanan.
+async function enrichSummaryWithLastUpdate(
+  rows,
+  { maxPairs = 200, concurrency = 8 } = {},
+) {
+  const pairs = new Map(); // "rackcode||item" -> { rackcode, item }
+  (rows || []).forEach((row) => {
+    const rackcode = getField(row, "rackcode");
+    const item = getField(row, "item");
+    if (rackcode && item) {
+      pairs.set(`${rackcode}||${item}`, { rackcode, item });
+    }
+  });
+  const uniquePairs = Array.from(pairs.values());
+
+  if (uniquePairs.length === 0) {
+    return { rows, lastUpdateEnriched: true, lastUpdateSkippedReason: undefined };
+  }
+
+  if (
+    maxPairs != null &&
+    Number.isFinite(maxPairs) &&
+    uniquePairs.length > maxPairs
+  ) {
+    return {
+      rows,
+      lastUpdateEnriched: false,
+      lastUpdateSkippedReason: `Ada ${uniquePairs.length} kombinasi rackcode+item pada hasil ini (batas ${maxPairs}), jadi kolom Last Update dilewati biar gak membebani server Cross Docking. Persempit filter untuk melihat Last Update.`,
+    };
+  }
+
+  const pairToLastUpdate = new Map(); // "rackcode||item" -> lastupdated (raw, paling baru)
+  let anyPairFailed = false;
+
+  await mapWithConcurrency(uniquePairs, concurrency, async (pair) => {
+    const key = `${pair.rackcode}||${pair.item}`;
+    try {
+      const detailRows = await CrossDockingClient.fetchDetail(
+        pair.rackcode,
+        pair.item,
+      );
+      let latestRaw;
+      let latestTime = -Infinity;
+      (detailRows || []).forEach((detailRow) => {
+        const raw = getField(detailRow, "lastupdated");
+        if (raw === undefined || raw === null || raw === "") return;
+        const t = new Date(raw).getTime();
+        if (Number.isNaN(t)) return;
+        if (t > latestTime) {
+          latestTime = t;
+          latestRaw = raw;
+        }
+      });
+      if (latestRaw !== undefined) pairToLastUpdate.set(key, latestRaw);
+    } catch (err) {
+      anyPairFailed = true;
+      console.error(
+        `enrichSummaryWithLastUpdate: gagal ambil detail ${pair.rackcode}/${pair.item}:`,
+        err,
+      );
+    }
+  });
+
+  const enrichedRows = rows.map((row) => {
+    const rackcode = getField(row, "rackcode");
+    const item = getField(row, "item");
+    const key = rackcode && item ? `${rackcode}||${item}` : undefined;
+    const lastupdate = key ? pairToLastUpdate.get(key) : undefined;
+    // age_krw dihitung server-side (bukan di frontend) biar gak kepengaruh
+    // jam device operator yang bisa aja salah — sama pola-nya kayak
+    // CrossDockingController.detail buat modal per-baris.
+    return { ...row, lastupdate, age_krw: daysSinceJakarta(lastupdate) };
+  });
+
+  return {
+    rows: enrichedRows,
+    lastUpdateEnriched: !anyPairFailed,
+    lastUpdateSkippedReason: anyPairFailed
+      ? "Sebagian data Last Update gagal diambil (koneksi ke server Cross Docking sempat gagal untuk sebagian rack/item). Baris yang gagal akan tampil \"-\" di kolom Last Update."
+      : undefined,
+  };
+}
+
+module.exports = { enrichWithBcCollie, enrichSummaryWithLastUpdate };

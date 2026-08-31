@@ -6,7 +6,11 @@
 // field apapun yang dibalikin API itu tetap kepake di frontend.
 const CrossDockingClient = require("../../services/crossDockingClient");
 const { getField } = require("../../utils/apiField");
-const { enrichWithBcCollie } = require("../../utils/bcCollieEnrichment");
+const {
+  enrichWithBcCollie,
+  enrichSummaryWithLastUpdate,
+} = require("../../utils/bcCollieEnrichment");
+const { daysSinceJakarta } = require("../../utils/date");
 
 function filtersFromQuery(query) {
   return {
@@ -51,7 +55,17 @@ class CrossDockingController {
       }
       const viewMode = req.query.viewMode === "byItem" ? "byItem" : "byRack";
       const data = await CrossDockingClient.fetchSummary(viewMode, filters);
-      res.json({ data });
+      // Tempelin kolom "Last Update" per baris (rackcode+item) — lihat
+      // enrichSummaryWithLastUpdate buat alasan kenapa ini query terpisah
+      // (endpoint /stock-cd/summary sendiri gak ngebalikin lastupdated).
+      const enriched = await enrichSummaryWithLastUpdate(data || []);
+      res.json({
+        data: enriched.rows,
+        meta: {
+          lastUpdateEnriched: enriched.lastUpdateEnriched,
+          lastUpdateSkippedReason: enriched.lastUpdateSkippedReason,
+        },
+      });
     } catch (err) {
       console.error("CrossDockingController.summary gagal:", err);
       res.status(502).json({
@@ -135,6 +149,43 @@ class CrossDockingController {
         message:
           err.message ||
           "Gagal menyiapkan data export Detail All Cross Docking",
+      });
+    }
+  }
+
+  // Detail per SATU pasangan rackcode+item — dipanggil pas user klik salah
+  // satu baris di tabel Ringkasan Stock (mirip popup "Detail: RACKCODE /
+  // ITEM" di web Cross Docking aslinya). Balikin baris level pcs/collie
+  // (rackcode, item, curweek, bc_collie, barcode, lastupdated) + `age_krw`
+  // yang dihitung server (lastupdated dikurangin waktu sekarang, dalam
+  // hari) biar konsisten walau jam client-nya keliru.
+  static async detail(req, res) {
+    try {
+      const rackcode = (req.query.rackcode || "").trim();
+      const item = (req.query.item || "").trim();
+      if (!rackcode || !item) {
+        return res.status(400).json({
+          message: "Parameter rackcode dan item wajib diisi.",
+        });
+      }
+      const rows = await CrossDockingClient.fetchDetail(rackcode, item);
+      const data = (rows || []).map((row) => {
+        const lastupdated = getField(row, "lastupdated");
+        return {
+          rackcode: getField(row, "rackcode") ?? rackcode,
+          item: getField(row, "item") ?? item,
+          curweek: getField(row, "curweek"),
+          bc_collie: getField(row, "bc_collie"),
+          barcode: getField(row, "barcode"),
+          lastupdated,
+          age_krw: daysSinceJakarta(lastupdated),
+        };
+      });
+      res.json({ data });
+    } catch (err) {
+      console.error("CrossDockingController.detail gagal:", err);
+      res.status(502).json({
+        message: err.message || "Gagal mengambil data detail Cross Docking",
       });
     }
   }
