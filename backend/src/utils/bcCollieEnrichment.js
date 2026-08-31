@@ -118,13 +118,20 @@ async function enrichWithBcCollie(
 }
 
 // Versi khusus buat baris SUMMARY (per rackcode+item, sudah teragregasi —
-// gak ada barcode per baris kayak Detail All). "Last Update" 1 baris summary
-// diambil dari lastupdated PALING BARU di antara semua pcs rackcode+item itu
-// menurut /stock-cd/detail. Dibatasi maxPairs (default lebih kecil dari
-// export, karena ini dipanggil pas tabel web dimuat, bukan aksi yang user
-// sengaja tunggu) — kalau kombinasi rackcode+item pada hasil summary
-// kebanyakan, kolom "Last Update" dilewati (row tetap tampil tanpa field itu)
-// biar server Cross Docking sumbernya gak kebebanan.
+// gak ada barcode per baris kayak Detail All). Nempelin 2 hal yang gak
+// reliable/kosong di /stock-cd/summary aslinya, dengan numpang 1 query yang
+// sama ke /stock-cd/detail per pasangan rackcode+item:
+// 1. "Last Update" — diambil dari lastupdated PALING BARU di antara semua
+//    pcs rackcode+item itu.
+// 2. "Loccode" (Location) — /stock-cd/summary SELALU balikin loccode: null
+//    (dikonfirmasi lewat network tab web Cross Docking asli), padahal
+//    /stock-cd/detail per pasangan datanya ADA, jadi loccode pertama yang
+//    ketemu dipakai buat nimpa null itu.
+// Dibatasi maxPairs (default lebih kecil dari export, karena ini dipanggil
+// pas tabel web dimuat, bukan aksi yang user sengaja tunggu) — kalau
+// kombinasi rackcode+item pada hasil summary kebanyakan, kedua kolom ini
+// dilewati (row tetap tampil tanpa field itu) biar server Cross Docking
+// sumbernya gak kebebanan.
 async function enrichSummaryWithLastUpdate(
   rows,
   { maxPairs = 200, concurrency = 8 } = {},
@@ -140,7 +147,11 @@ async function enrichSummaryWithLastUpdate(
   const uniquePairs = Array.from(pairs.values());
 
   if (uniquePairs.length === 0) {
-    return { rows, lastUpdateEnriched: true, lastUpdateSkippedReason: undefined };
+    return {
+      rows,
+      lastUpdateEnriched: true,
+      lastUpdateSkippedReason: undefined,
+    };
   }
 
   if (
@@ -151,11 +162,17 @@ async function enrichSummaryWithLastUpdate(
     return {
       rows,
       lastUpdateEnriched: false,
-      lastUpdateSkippedReason: `Ada ${uniquePairs.length} kombinasi rackcode+item pada hasil ini (batas ${maxPairs}), jadi kolom Last Update dilewati biar gak membebani server Cross Docking. Persempit filter untuk melihat Last Update.`,
+      lastUpdateSkippedReason: `Ada ${uniquePairs.length} kombinasi rackcode+item pada hasil ini (batas ${maxPairs}), jadi kolom Last Update & Loccode dilewati biar gak membebani server Cross Docking. Persempit filter (mis. isi Rackcode/Item lebih spesifik, bukan cuma prefix pendek) untuk melihat Last Update & Loccode.`,
     };
   }
 
   const pairToLastUpdate = new Map(); // "rackcode||item" -> lastupdated (raw, paling baru)
+  // "rackcode||item" -> loccode. /stock-cd/summary SELALU balikin loccode:
+  // null (dikonfirmasi lewat network tab web Cross Docking asli), padahal
+  // /stock-cd/detail per pasangan rackcode+item (yang kita query di sini
+  // juga, buat Last Update) datanya ADA — jadi numpang query yang sama,
+  // ambil loccode pertama yang keisi (biasanya seragam per rackcode+item).
+  const pairToLoccode = new Map();
   let anyPairFailed = false;
 
   await mapWithConcurrency(uniquePairs, concurrency, async (pair) => {
@@ -167,17 +184,29 @@ async function enrichSummaryWithLastUpdate(
       );
       let latestRaw;
       let latestTime = -Infinity;
+      let loccode;
       (detailRows || []).forEach((detailRow) => {
         const raw = getField(detailRow, "lastupdated");
-        if (raw === undefined || raw === null || raw === "") return;
-        const t = new Date(raw).getTime();
-        if (Number.isNaN(t)) return;
-        if (t > latestTime) {
-          latestTime = t;
-          latestRaw = raw;
+        if (raw !== undefined && raw !== null && raw !== "") {
+          const t = new Date(raw).getTime();
+          if (!Number.isNaN(t) && t > latestTime) {
+            latestTime = t;
+            latestRaw = raw;
+          }
+        }
+        if (!loccode) {
+          const rowLoccode = getField(detailRow, "loccode");
+          if (
+            rowLoccode !== undefined &&
+            rowLoccode !== null &&
+            rowLoccode !== ""
+          ) {
+            loccode = rowLoccode;
+          }
         }
       });
       if (latestRaw !== undefined) pairToLastUpdate.set(key, latestRaw);
+      if (loccode !== undefined) pairToLoccode.set(key, loccode);
     } catch (err) {
       anyPairFailed = true;
       console.error(
@@ -195,14 +224,26 @@ async function enrichSummaryWithLastUpdate(
     // age_krw dihitung server-side (bukan di frontend) biar gak kepengaruh
     // jam device operator yang bisa aja salah — sama pola-nya kayak
     // CrossDockingController.detail buat modal per-baris.
-    return { ...row, lastupdate, age_krw: daysSinceJakarta(lastupdate) };
+    // loccode dari summary aslinya SELALU null — timpa pakai hasil query
+    // detail di atas kalau ketemu. Kalau gak ketemu juga (gagal fetch atau
+    // detail-nya sendiri kosong), biarin apa adanya (tetap null/kosong).
+    const enrichedLoccode =
+      key && pairToLoccode.has(key)
+        ? pairToLoccode.get(key)
+        : getField(row, "loccode");
+    return {
+      ...row,
+      loccode: enrichedLoccode,
+      lastupdate,
+      age_krw: daysSinceJakarta(lastupdate),
+    };
   });
 
   return {
     rows: enrichedRows,
     lastUpdateEnriched: !anyPairFailed,
     lastUpdateSkippedReason: anyPairFailed
-      ? "Sebagian data Last Update gagal diambil (koneksi ke server Cross Docking sempat gagal untuk sebagian rack/item). Baris yang gagal akan tampil \"-\" di kolom Last Update."
+      ? 'Sebagian data Last Update gagal diambil (koneksi ke server Cross Docking sempat gagal untuk sebagian rack/item). Baris yang gagal akan tampil "-" di kolom Last Update.'
       : undefined,
   };
 }

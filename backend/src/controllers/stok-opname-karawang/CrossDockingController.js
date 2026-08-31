@@ -55,10 +55,16 @@ class CrossDockingController {
       }
       const viewMode = req.query.viewMode === "byItem" ? "byItem" : "byRack";
       const data = await CrossDockingClient.fetchSummary(viewMode, filters);
-      // Tempelin kolom "Last Update" per baris (rackcode+item) — lihat
-      // enrichSummaryWithLastUpdate buat alasan kenapa ini query terpisah
-      // (endpoint /stock-cd/summary sendiri gak ngebalikin lastupdated).
-      const enriched = await enrichSummaryWithLastUpdate(data || []);
+      // Tempelin kolom "Last Update" DAN benerin "Loccode" (yang di
+      // /stock-cd/summary aslinya selalu null) per baris (rackcode+item) —
+      // lihat enrichSummaryWithLastUpdate buat detail kenapa ini query
+      // terpisah ke /stock-cd/detail. maxPairs dinaikin dari default 200 ke
+      // 500 (filter yang cuma prefix pendek, mis. "b", bisa narik ratusan
+      // rackcode sekaligus) — kalau masih kena skip juga, pesannya kebawa
+      // ke frontend lewat meta.lastUpdateSkippedReason.
+      const enriched = await enrichSummaryWithLastUpdate(data || [], {
+        maxPairs: 200,
+      });
       res.json({
         data: enriched.rows,
         meta: {

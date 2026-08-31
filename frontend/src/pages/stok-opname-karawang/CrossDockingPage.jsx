@@ -611,6 +611,7 @@ export default function CrossDockingPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailRows, setDetailRows] = useState(null); // null = belum pernah diminta
   const [detailNote, setDetailNote] = useState(""); // info non-fatal, mis. Bc Collie dilewati
+  const [summaryNote, setSummaryNote] = useState(""); // info non-fatal, mis. Last Update/Loccode dilewati
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [exportingCsv, setExportingCsv] = useState(false);
 
@@ -646,6 +647,7 @@ export default function CrossDockingPage() {
   const handleRefresh = async () => {
     setLoading(true);
     setError("");
+    setSummaryNote("");
     setDetailRows(null); // filter berubah, detail all lama udah gak nyambung
     try {
       const [summaryRes, totalsRes] = await Promise.all([
@@ -659,6 +661,14 @@ export default function CrossDockingPage() {
       setSummaryRows(sortByCurweekOldestFirst(summaryRes.data?.data || []));
       setTotals(totalsRes.data?.data || null);
       setLoaded(true);
+      const meta = summaryRes.data?.meta;
+      if (
+        meta &&
+        meta.lastUpdateEnriched === false &&
+        meta.lastUpdateSkippedReason
+      ) {
+        setSummaryNote(meta.lastUpdateSkippedReason);
+      }
     } catch (err) {
       setError(
         err.response?.data?.message ||
@@ -666,6 +676,7 @@ export default function CrossDockingPage() {
       );
       setSummaryRows([]);
       setTotals(null);
+      setSummaryNote("");
     } finally {
       setLoading(false);
     }
@@ -973,6 +984,9 @@ export default function CrossDockingPage() {
                 {viewMode === "byRack" ? "per Rack" : "per Item"})
               </h2>
             </div>
+            {summaryNote && (
+              <div className="ko-cd-truncate-notice">{summaryNote}</div>
+            )}
             <DynamicTable
               rows={summaryRows}
               emptyMessage="Tidak ada data summary."
