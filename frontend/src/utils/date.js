@@ -51,26 +51,3 @@ export function formatDateID(date, options = {}) {
   const d = date instanceof Date ? date : new Date(date);
   return d.toLocaleDateString("id-ID", { timeZone: TZ, ...options });
 }
-
-const generateManualDoNumber = (sequence) => {
-  // Pakai tanggal Item Request yang di-upload (uploadTanggal) kalau ada
-  // -- fallback ke tanggal hari ini cuma kalau belum ada Item Request
-  // yang ke-upload sama sekali (uploadTanggal null).
-  //
-  // PENTING: ambil Y-M-D lewat toJakartaDateString (paksa zona
-  // Asia/Jakarta), JANGAN pakai .getDate()/.getMonth()/.getFullYear()
-  // langsung -- itu ngikutin timezone PC/browser masing2 user, dan
-  // ternyata ada PC yang timezone/locale-nya salah setting (lihat juga
-  // fix Dashboard blank putih sebelumnya), jadi tanggalnya bisa meleset
-  // 1 hari kalau dihitung dari local time PC itu.
-  const jakartaStr = toJakartaDateString(
-    uploadTanggal ? new Date(uploadTanggal) : new Date(),
-  );
-  const [yyyy, mm, dd] = (jakartaStr || toJakartaDateString(new Date())).split(
-    "-",
-  );
-  const yy = yyyy.slice(-2);
-  const seq = String(sequence).padStart(3, "0");
-
-  return `T-2${dd}${mm}${yy}${seq}`;
-};

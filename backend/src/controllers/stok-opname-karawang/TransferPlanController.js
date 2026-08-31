@@ -24,6 +24,37 @@ function stripItemSuffix(itemCode) {
     .replace(/-\d+$/, "");
 }
 
+// Ubah nilai tanggal dari cell Excel (bisa Date object atau string) jadi
+// string polos "YYYY-MM-DD" apa adanya -- SENGAJA gak lewat new Date()+
+// getDate()/getMonth() atau logic timezone apapun, karena itu yang bikin
+// beberapa baris kegeser 1 hari pas di-INSERT (koneksi DB di-config
+// timezone +07:00, yang nambahin jam ke Date object dari ExcelJS dan
+// bisa numbrung ke hari berikutnya kalau ada sisa waktu tersembunyi).
+// ExcelJS selalu encode cell Date pakai UTC, jadi kita baca pakai
+// getUTCFullYear/getUTCMonth/getUTCDate -- BUKAN getFullYear/getMonth
+// versi lokal.
+function excelDateToYmd(value) {
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    const yyyy = value.getUTCFullYear();
+    const mm = String(value.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(value.getUTCDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  const str = String(value || "").trim();
+  const iso = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+
+  const dmy = str.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$/);
+  if (dmy) {
+    const [, d, m, y] = dmy;
+    return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+
+  return null;
+}
+
 class TransferPlanController {
   async uploadItemRequest(req, res) {
     try {
@@ -47,7 +78,8 @@ class TransferPlanController {
       worksheet.eachRow((row, rowNumber) => {
         if (rowNumber === 1) return;
 
-        const date = row.getCell(1).value;
+        const dateRaw = row.getCell(1).value;
+        const date = excelDateToYmd(dateRaw);
         const jenis = String(row.getCell(2).value || "").trim();
         const item = String(row.getCell(3).value || "").trim();
         const qty = row.getCell(4).value;
@@ -56,6 +88,12 @@ class TransferPlanController {
         // Skip baris kosong
         if (!item && !qty && !ket) {
           return;
+        }
+
+        if (!date) {
+          throw new Error(
+            `Tanggal pada baris ${rowNumber} tidak valid atau kosong.`,
+          );
         }
 
         if (!item) {

@@ -760,12 +760,35 @@ export default function TransferPlanPage() {
           t._volume = Number((t._volume + tubeLine.total_volume).toFixed(3));
         });
       });
-
       const newTrips = trips.map(({ _volume, _slots, ...t }) => t);
 
-      setManualTrips((prev) => [...prev, ...newTrips]);
-      setShowPreviewTable(false);
+      // Auto-assign truk (Truk 1, Truk 2, dst) ke tiap trip baru yang
+      // BELUM punya truk, lanjut dari slot yang udah kepake -- tetep bisa
+      // diganti manual kapan aja lewat tombol "Pilih Truk" (handleSetTripTruck).
+      const usedTruckNumbers = manualTrips
+        .map((t) => (t.truck || "").trim())
+        .filter(Boolean)
+        .map((label) => {
+          const m = label.match(/^Truk\s+(\d+)$/i);
+          return m ? Number(m[1]) : null;
+        })
+        .filter((n) => n !== null);
+      let nextSlot =
+        Math.max(
+          maxTruckSlot,
+          usedTruckNumbers.length ? Math.max(...usedTruckNumbers) : 0,
+        ) + 1;
 
+      const newTripsWithTruck = newTrips.map((t) => {
+        if (t.truck) return t;
+        const truck = `Truk ${nextSlot}`;
+        nextSlot += 1;
+        return { ...t, truck };
+      });
+
+      setMaxTruckSlot(nextSlot - 1);
+      setManualTrips((prev) => [...prev, ...newTripsWithTruck]);
+      setShowPreviewTable(false);
       const partialNote =
         partialCount > 0
           ? ` (${partialCount} item cuma kebagi sebagian karena stok Tangerang terbatas)`
@@ -1000,37 +1023,44 @@ export default function TransferPlanPage() {
   };
 
   const generateManualDoNumber = (sequence) => {
-    // Pakai tanggal Item Request yang di-upload (uploadTanggal) kalau ada
-    // -- fallback ke tanggal hari ini cuma kalau belum ada Item Request
-    // yang ke-upload sama sekali (uploadTanggal null).
-    //
-    // PENTING: ambil Y-M-D lewat toJakartaDateString (paksa zona
-    // Asia/Jakarta), JANGAN pakai .getDate()/.getMonth()/.getFullYear()
-    // langsung -- itu ngikutin timezone PC/browser masing2 user, dan
-    // ternyata ada PC yang timezone/locale-nya salah setting (lihat juga
-    // fix Dashboard blank putih sebelumnya), jadi tanggalnya bisa meleset
-    // 1 hari kalau dihitung dari local time PC itu.
-    const jakartaStr = toJakartaDateString(
-      uploadTanggal ? new Date(uploadTanggal) : new Date(),
-    );
-    const [yyyy, mm, dd] = (
-      jakartaStr || toJakartaDateString(new Date())
-    ).split("-");
-    const yy = yyyy.slice(-2);
     const seq = String(sequence).padStart(3, "0");
 
-    return `T-2${dd}${mm}${yy}${seq}`;
+    if (uploadTanggal && /^\d{4}-\d{2}-\d{2}/.test(String(uploadTanggal))) {
+      const [yyyy, mm, dd] = String(uploadTanggal).slice(0, 10).split("-");
+      return `T-2${dd}${mm}${yyyy.slice(-2)}${seq}`;
+    }
+
+    const jakartaStr = toJakartaDateString(new Date());
+    const [yyyy, mm, dd] = jakartaStr.split("-");
+    return `T-2${dd}${mm}${yyyy.slice(-2)}${seq}`;
   };
 
   // Bikin trip manual baru (No Trip auto-generate, tapi bisa diedit user).
   const addManualTrip = () => {
     const id = `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
+    const usedTruckNumbers = manualTrips
+      .map((t) => (t.truck || "").trim())
+      .filter(Boolean)
+      .map((label) => {
+        const m = label.match(/^Truk\s+(\d+)$/i);
+        return m ? Number(m[1]) : null;
+      })
+      .filter((n) => n !== null);
+    const nextSlot =
+      Math.max(
+        maxTruckSlot,
+        usedTruckNumbers.length ? Math.max(...usedTruckNumbers) : 0,
+      ) + 1;
+
+    setMaxTruckSlot(nextSlot);
+
     setManualTrips((prev) => [
       ...prev,
       {
         id,
         no_trip: generateManualDoNumber(prev.length + 1),
+        truck: `Truk ${nextSlot}`,
         items: [],
       },
     ]);
@@ -1327,8 +1357,11 @@ export default function TransferPlanPage() {
     // pertama ketemu). Fallback ke tanggal hari ini kalau data lama
     // (sebelum fix ini) belum kebawa tanggal_request-nya sama sekali.
     const formatTanggal = (val) => {
-      const d = val ? new Date(val) : new Date();
-      if (Number.isNaN(d.getTime())) return null;
+      if (val && /^\d{4}-\d{2}-\d{2}/.test(String(val))) {
+        const [yyyy, mm, dd] = String(val).slice(0, 10).split("-");
+        return `${dd}/${mm}/${yyyy}`;
+      }
+      const d = new Date();
       return `${String(d.getDate()).padStart(2, "0")}/${String(
         d.getMonth() + 1,
       ).padStart(2, "0")}/${d.getFullYear()}`;

@@ -1,4 +1,5 @@
 const { poolUtama, poolCrossDocking } = require("../../config/database");
+const { toJakartaDateString } = require("../../utils/date");
 
 class KarawangItemReqModel {
   // Setiap upload Item Request baru, data lama di tabel ini di-truncate
@@ -216,7 +217,7 @@ class KarawangItemReqModel {
       SELECT TRIM(UPPER(item)) AS item,
              SUM(CAST(qty AS DECIMAL(15,3))) AS qty,
              MAX(jenis) AS jenis,
-             MAX(date) AS tanggal_request
+            DATE_FORMAT(MAX(date), '%Y-%m-%d') AS tanggal_request
       FROM stok_opname_karawang_item_req
       GROUP BY TRIM(UPPER(item))
     `);
@@ -262,13 +263,17 @@ class KarawangItemReqModel {
   // yang di-upload (kolom `date`); kalau gak dikasih, fallback ke tanggal
   // hari ini server.
   static generateDoNumber(sequence, baseDate = null) {
-    const parsed = baseDate ? new Date(baseDate) : new Date();
-    const now = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
-    const dd = String(now.getDate()).padStart(2, "0");
-    const mm = String(now.getMonth() + 1).padStart(2, "0");
-    const yy = String(now.getFullYear()).slice(-2);
     const seq = String(sequence).padStart(3, "0");
 
+    if (baseDate && /^\d{4}-\d{2}-\d{2}/.test(String(baseDate))) {
+      const [yyyy, mm, dd] = String(baseDate).slice(0, 10).split("-");
+      return `T-2${dd}${mm}${yyyy.slice(-2)}${seq}`;
+    }
+
+    const now = new Date();
+    const dd = String(now.getUTCDate()).padStart(2, "0");
+    const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
+    const yy = String(now.getUTCFullYear()).slice(-2);
     return `T-2${dd}${mm}${yy}${seq}`;
   }
 
