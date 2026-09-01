@@ -308,6 +308,22 @@ export default function TransferPlanPage() {
   // tire selesai). Tire biasa (non tube-type) tetep 1 slot.
   const itemSlotCount = (itemCode) => (isTubeType(itemCode) ? 2 : 1);
 
+  // Item dengan kode AWALAN "TH" (mis. "TH-1234") atau AKHIRAN "SP" (mis.
+  // "IBD1001SP-0") -- SESUAI PERMINTAAN, item ini gak boleh nyampur sama
+  // item lain di 1 trip yang sama pas auto-generate. Kode item ASLI di
+  // master selalu ada suffix "-<angka>" di belakang (mis. "IBD1001SP-0"),
+  // makanya suffix itu di-strip DULU sebelum cek prefix/akhiran -- kalau
+  // enggak, "IBD1001SP-0" ujungnya "-0" bukan "SP" jadi kelewat kedetect.
+  const stripItemCodeSuffix = (itemCode) =>
+    String(itemCode || "")
+      .trim()
+      .toUpperCase()
+      .replace(/-\d+$/, "");
+  const isThOrSpItem = (itemCode) => {
+    const code = stripItemCodeSuffix(itemCode);
+    return code.startsWith("TH") || code.endsWith("SP");
+  };
+
   // Bikin 1 baris item "tube pasangan" dari data master pairing, qty
   // ngikutin qty tire-nya (1:1). Ditandain pairedTire biar sinkron pas
   // qty tire diubah / tire dihapus dari trip (lihat updateManualTripItemQty
@@ -629,16 +645,28 @@ export default function TransferPlanPage() {
       // lokasi live Tangerang-nya.
       // Item yang gedung-nya gak ketemu (lokasi live-nya kosong) masuk
       // grup "TANPA GEDUNG" tersendiri, ditaruh paling belakang.
-      const chunksByGedung = new Map();
+      //
+      // Di DALAM tiap gedung, item kode AWALAN "TH" / AKHIRAN "SP" masih
+      // dipisah lagi jadi sub-grup TERSENDIRI (lihat isThOrSpItem) --
+      // bin-packing-nya jalan sendiri-sendiri, jadi 1 trip GAK PERNAH
+      // nyampur item TH/SP sama item biasa, walau gedung-nya sama.
+      const groupKeyOf = (item) =>
+        `${item.gedung || "TANPA GEDUNG"}||${isThOrSpItem(item.item) ? "THSP" : "NORMAL"}`;
+
+      const chunksByGroup = new Map();
       chunks.forEach((item) => {
-        const gedung = item.gedung || "TANPA GEDUNG";
-        if (!chunksByGedung.has(gedung)) chunksByGedung.set(gedung, []);
-        chunksByGedung.get(gedung).push(item);
+        const key = groupKeyOf(item);
+        if (!chunksByGroup.has(key)) chunksByGroup.set(key, []);
+        chunksByGroup.get(key).push(item);
       });
-      const gedungOrder = [...chunksByGedung.keys()].sort((a, b) => {
-        if (a === "TANPA GEDUNG") return 1;
-        if (b === "TANPA GEDUNG") return -1;
-        return a.localeCompare(b);
+      const groupOrder = [...chunksByGroup.keys()].sort((a, b) => {
+        const [gedungA, subA] = a.split("||");
+        const [gedungB, subB] = b.split("||");
+        if (gedungA === "TANPA GEDUNG" && gedungB !== "TANPA GEDUNG") return 1;
+        if (gedungB === "TANPA GEDUNG" && gedungA !== "TANPA GEDUNG") return -1;
+        if (gedungA !== gedungB) return gedungA.localeCompare(gedungB);
+        // Gedung sama -- grup NORMAL duluan, baru THSP nyusul di belakangnya.
+        return subA.localeCompare(subB);
       });
 
       const trips = [];
@@ -646,13 +674,16 @@ export default function TransferPlanPage() {
       let partialCount = 0;
       const partialItemSeen = new Set();
 
-      gedungOrder.forEach((gedung) => {
-        // Trip existing yang dicari best-fit-nya cuma trip DALAM GEDUNG
-        // YANG SAMA (groupTrips lokal per gedung) -- bukan `trips` global
-        // -- biar item BPW1 gak pernah ke-nyelip ke trip yang isinya BPW2.
+      groupOrder.forEach((groupKey) => {
+        const gedung = groupKey.split("||")[0];
+        // Trip existing yang dicari best-fit-nya cuma trip DALAM GRUP
+        // YANG SAMA (gedung + TH/SP vs biasa -- groupTrips lokal) --
+        // bukan `trips` global -- biar item BPW1 gak pernah ke-nyelip ke
+        // trip yang isinya BPW2, dan item TH/SP gak pernah ke-nyelip ke
+        // trip item biasa (atau sebaliknya).
         const groupTrips = [];
 
-        chunksByGedung.get(gedung).forEach((item) => {
+        chunksByGroup.get(groupKey).forEach((item) => {
           const berat = Number(item.berat || 0);
           const qty = item.allocQty;
           const itemVolume = item.lineVolume;
