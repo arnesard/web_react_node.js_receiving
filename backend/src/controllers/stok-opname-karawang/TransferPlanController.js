@@ -233,6 +233,82 @@ class TransferPlanController {
     }
   }
 
+  // GET /item-req/search-outside?keyword=...
+  // Search item DI LUAR Item Request (dari master item) buat modal
+  // "Pilih Item Buat Ditambahin" di Transfer Plan Karawang -- dipakai
+  // pas user mau nambah item yang gak keupload di Excel Item Request.
+  // Enrich stok Tangerang/Karawang + gedung sama kayak previewItemRequest
+  // biar tampilan & kalkulasi kapasitas truk konsisten sama item dari
+  // request. NOTE: gedung OE TUBE gak bisa dipatok "BPW1" di sini (jenis
+  // item gak ada di master_item), jadi selalu ikut hasil deriveGedung dari
+  // lokasi Tangerang -- kalau item TUBE dicari lewat sini & lokasinya gak
+  // ketemu, gedung bisa kebaca "?" dan perlu dicek manual.
+  async searchOutsideItem(req, res) {
+    try {
+      const keyword = (req.query.keyword || req.query.q || "").trim();
+      if (!keyword) return response.success(res, []);
+
+      const items = await KarawangItemRequestModel.searchMasterItemByKeyword(
+        keyword,
+        20,
+      );
+      if (items.length === 0) return response.success(res, []);
+
+      const enriched = await mapWithConcurrency(items, 3, async (item) => {
+        const lookupCode = stripItemSuffix(item.item);
+
+        let stokTangerang = 0;
+        let stokKarawang = 0;
+        let lokasiTangerang = [];
+
+        try {
+          const dataTangerang = await ControlStockModel.findLocationsByItem(
+            lookupCode,
+            "OE",
+          );
+          stokTangerang = dataTangerang?.summary?.total_qty || 0;
+          lokasiTangerang = dataTangerang?.lokasi || [];
+        } catch (err) {
+          console.error(
+            `searchOutsideItem: gagal ambil stok Tangerang untuk ${item.item} (lookup ${lookupCode}):`,
+            err.message,
+          );
+        }
+
+        try {
+          const dataKarawang = await KarawangFifoModel.locationsByItem(
+            lookupCode,
+            "all",
+          );
+          stokKarawang = dataKarawang?.summary?.total_qty || 0;
+        } catch (err) {
+          console.error(
+            `searchOutsideItem: gagal ambil stok Karawang untuk ${item.item} (lookup ${lookupCode}):`,
+            err.message,
+          );
+        }
+
+        const gedung =
+          ControlStockModel.deriveGedungFromLokasi(lokasiTangerang);
+
+        return {
+          ...item,
+          qty: 0,
+          stok_tangerang: stokTangerang,
+          stok_karawang: stokKarawang,
+          gedung,
+          tanggal_request: null,
+          fromRequest: false,
+        };
+      });
+
+      return response.success(res, enriched);
+    } catch (err) {
+      console.error("TransferPlanController.searchOutsideItem gagal:", err);
+      return response.error(res, "Gagal mencari item di luar request.");
+    }
+  }
+
   async tireTripPlan(req, res) {
     try {
       const kapasitas = Number(req.query.kapasitas || 52);

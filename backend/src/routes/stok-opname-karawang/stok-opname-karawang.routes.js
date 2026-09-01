@@ -78,6 +78,10 @@ router.get("/item-req/tire-trip-plan", TransferPlanController.tireTripPlan);
 // Stock) & stok Karawang (Control FIFO) per item, dasar buat user pilih
 // manual No Trip + item.
 router.get("/item-req/preview", TransferPlanController.previewItemRequest);
+router.get(
+  "/item-req/search-outside",
+  TransferPlanController.searchOutsideItem,
+);
 
 router.get("/item-req/summary", TransferPlanController.itemRequestSummary);
 

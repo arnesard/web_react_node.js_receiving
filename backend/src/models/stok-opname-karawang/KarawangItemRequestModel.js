@@ -202,6 +202,34 @@ class KarawangItemReqModel {
     return rows;
   }
 
+  // Cari item dari MASTER ITEM (stok_opname_karawang_master_item) --
+  // BUKAN dari Item Request. Dipakai fitur "Pilih Item Buat Ditambahin"
+  // pas user mau nambah item DI LUAR item yang keupload di Excel Item
+  // Request (mis. request-nya cuma 10 kode, tapi user mau kirim item ke-11
+  // juga sekalian dalam 1 trip). Balikin volume/berat sekalian biar
+  // kalkulasi kapasitas truk & RMB tetap akurat kayak item dari request.
+  static async searchMasterItemByKeyword(keyword, limit = 20) {
+    const kw = (keyword || "").trim();
+    if (!kw) return [];
+
+    const [rows] = await poolUtama.query(
+      `SELECT TRIM(UPPER(code_no)) AS code_no, description,
+              COALESCE(volume, 0) AS volume, COALESCE(berat, 0) AS berat
+       FROM stok_opname_karawang_master_item
+       WHERE code_no LIKE ? OR description LIKE ?
+       ORDER BY (code_no LIKE ?) DESC, code_no
+       LIMIT ?`,
+      [`${kw}%`, `%${kw}%`, `${kw}%`, limit],
+    );
+
+    return rows.map((r) => ({
+      item: r.code_no,
+      deskripsi: (r.description || "").trim() || "-",
+      volume: Number(r.volume || 0),
+      berat: Number(r.berat || 0),
+    }));
+  }
+
   // Trip Planner (Manual): qty Request MURNI dari Upload Item Request
   // manual (stok_opname_karawang_item_req, SEMUA jenis hari ini — TIRE,
   // OE TUBE, OE VALVE, dst) — TIDAK digabung sama sch_oem/do_cd lagi (beda

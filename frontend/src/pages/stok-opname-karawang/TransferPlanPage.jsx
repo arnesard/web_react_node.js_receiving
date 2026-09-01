@@ -143,6 +143,53 @@ export default function TransferPlanPage() {
   // (cuma 1 yang kebuka dalam satu waktu). itemPickerSearch: teks filter.
   const [itemPickerOpenTripId, setItemPickerOpenTripId] = useState(null);
   const [itemPickerSearch, setItemPickerSearch] = useState("");
+  // Hasil search item DI LUAR Item Request (dari master item, lewat
+  // endpoint /item-req/search-outside) -- dipakai biar user bisa nambah
+  // item yang gak keupload di Excel Item Request. Debounced, cuma jalan
+  // pas modal picker lagi kebuka & ketikan >= 2 karakter.
+  const [outsideItems, setOutsideItems] = useState([]);
+  const [loadingOutsideItems, setLoadingOutsideItems] = useState(false);
+
+  useEffect(() => {
+    if (itemPickerOpenTripId === null) return;
+    const q = itemPickerSearch.trim();
+    if (q.length < 2) {
+      setOutsideItems([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setLoadingOutsideItems(true);
+      try {
+        const res = await api.get(
+          "/stok-opname-karawang/item-req/search-outside",
+          { params: { keyword: q } },
+        );
+        setOutsideItems(res.data?.data || []);
+      } catch (err) {
+        console.error("Gagal mencari item di luar request:", err);
+        setOutsideItems([]);
+      } finally {
+        setLoadingOutsideItems(false);
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [itemPickerOpenTripId, itemPickerSearch]);
+
+  // Gabungan item dari Item Request + item di luar request hasil search,
+  // dedup by kode item (item dari request menang kalau kode-nya sama --
+  // udah punya info qty/sisa yang lebih lengkap).
+  const pickableItems = useMemo(() => {
+    const requestCodes = new Set(previewItems.map((it) => it.item));
+    const extra = outsideItems
+      .filter((it) => !requestCodes.has(it.item))
+      .map((it) => ({ ...it, fromRequest: false }));
+    return [
+      ...previewItems.map((it) => ({ ...it, fromRequest: true })),
+      ...extra,
+    ];
+  }, [previewItems, outsideItems]);
 
   // ============ HISTORI TRIP PLAN (Filter Riwayat) ============
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -913,7 +960,7 @@ export default function TransferPlanPage() {
     const trip = manualTrips.find((t) => t.id === tripId);
     const alreadyInTrip = trip?.items.some((i) => i.item === itemCode);
 
-    const meta = previewItems.find((i) => i.item === itemCode) || {};
+    const meta = pickableItems.find((i) => i.item === itemCode) || {};
     const deskripsi = meta.deskripsi || "";
     const volume = Number(meta.volume || 0);
     const berat = Number(meta.berat || 0);
@@ -3143,13 +3190,13 @@ export default function TransferPlanPage() {
                       const selectedItemCode =
                         addItemForm[trip.id]?.itemCode || "";
                       const selectedMeta = selectedItemCode
-                        ? previewItems.find(
+                        ? pickableItems.find(
                             (it) => it.item === selectedItemCode,
                           )
                         : null;
                       const isPickerOpen = itemPickerOpenTripId === trip.id;
 
-                      const filteredItems = previewItems.filter((it) => {
+                      const filteredItems = pickableItems.filter((it) => {
                         if (!itemPickerSearch.trim()) return true;
                         const q = itemPickerSearch.trim().toLowerCase();
                         return (
@@ -3160,11 +3207,13 @@ export default function TransferPlanPage() {
 
                       const openPicker = () => {
                         setItemPickerSearch("");
+                        setOutsideItems([]);
                         setItemPickerOpenTripId(trip.id);
                       };
                       const closePicker = () => {
                         setItemPickerOpenTripId(null);
                         setItemPickerSearch("");
+                        setOutsideItems([]);
                       };
                       const pickItem = (itemCode) => {
                         updateAddItemForm(trip.id, "itemCode", itemCode);
@@ -3296,7 +3345,7 @@ export default function TransferPlanPage() {
                                       onChange={(e) =>
                                         setItemPickerSearch(e.target.value)
                                       }
-                                      placeholder="Cari kode / deskripsi item..."
+                                      placeholder="Cari kode / deskripsi item... (ketik 2+ huruf buat cari item di luar request juga)"
                                       style={{
                                         width: "100%",
                                         boxSizing: "border-box",
@@ -3315,16 +3364,32 @@ export default function TransferPlanPage() {
                                         flex: 1,
                                       }}
                                     >
-                                      {filteredItems.length === 0 && (
+                                      {filteredItems.length === 0 &&
+                                        !loadingOutsideItems && (
+                                          <div
+                                            style={{
+                                              padding: "16px",
+                                              fontSize: 13,
+                                              color: "#94a3b8",
+                                              fontStyle: "italic",
+                                            }}
+                                          >
+                                            {itemPickerSearch.trim().length >= 2
+                                              ? "Gak ada item yang cocok, baik dari request maupun master item."
+                                              : "Gak ada item yang cocok. Ketik 2+ huruf buat sekalian cari item di luar request."}
+                                          </div>
+                                        )}
+
+                                      {loadingOutsideItems && (
                                         <div
                                           style={{
-                                            padding: "16px",
-                                            fontSize: 13,
+                                            padding: "10px 16px",
+                                            fontSize: 12,
                                             color: "#94a3b8",
                                             fontStyle: "italic",
                                           }}
                                         >
-                                          Gak ada item yang cocok.
+                                          Nyari item di luar request...
                                         </div>
                                       )}
 
@@ -3369,9 +3434,27 @@ export default function TransferPlanPage() {
                                                 whiteSpace: "nowrap",
                                                 overflow: "hidden",
                                                 textOverflow: "ellipsis",
+                                                display: "flex",
+                                                alignItems: "center",
+                                                gap: 6,
                                               }}
                                             >
                                               {it.item} — {it.deskripsi || "-"}
+                                              {it.fromRequest === false && (
+                                                <span
+                                                  style={{
+                                                    flexShrink: 0,
+                                                    fontSize: 10,
+                                                    fontWeight: 700,
+                                                    color: "#7c3aed",
+                                                    background: "#ede9fe",
+                                                    borderRadius: 4,
+                                                    padding: "1px 6px",
+                                                  }}
+                                                >
+                                                  Di luar request
+                                                </span>
+                                              )}
                                             </div>
                                             <div
                                               className="ko-mono"
@@ -3383,41 +3466,73 @@ export default function TransferPlanPage() {
                                                 fontSize: 12,
                                               }}
                                             >
-                                              <span
-                                                style={{ color: "#64748b" }}
-                                              >
-                                                Req:{" "}
-                                                <b style={{ color: "#334155" }}>
-                                                  {Number(
-                                                    it.qty || 0,
-                                                  ).toLocaleString("id-ID")}
-                                                </b>
-                                              </span>
-                                              <span
-                                                style={{ color: "#64748b" }}
-                                              >
-                                                Masuk Trip:{" "}
-                                                <b
-                                                  style={{
-                                                    color:
-                                                      allocated > 0
-                                                        ? "#2563eb"
-                                                        : "#94a3b8",
-                                                  }}
+                                              {it.fromRequest === false ? (
+                                                <span
+                                                  style={{ color: "#64748b" }}
                                                 >
-                                                  {allocated.toLocaleString(
-                                                    "id-ID",
-                                                  )}
-                                                </b>
-                                              </span>
-                                              <span
-                                                style={{ color: "#64748b" }}
-                                              >
-                                                Sisa:{" "}
-                                                <b style={{ color: sisaColor }}>
-                                                  {sisa.toLocaleString("id-ID")}
-                                                </b>
-                                              </span>
+                                                  Masuk Trip:{" "}
+                                                  <b
+                                                    style={{
+                                                      color:
+                                                        allocated > 0
+                                                          ? "#2563eb"
+                                                          : "#94a3b8",
+                                                    }}
+                                                  >
+                                                    {allocated.toLocaleString(
+                                                      "id-ID",
+                                                    )}
+                                                  </b>
+                                                </span>
+                                              ) : (
+                                                <>
+                                                  <span
+                                                    style={{ color: "#64748b" }}
+                                                  >
+                                                    Req:{" "}
+                                                    <b
+                                                      style={{
+                                                        color: "#334155",
+                                                      }}
+                                                    >
+                                                      {Number(
+                                                        it.qty || 0,
+                                                      ).toLocaleString("id-ID")}
+                                                    </b>
+                                                  </span>
+                                                  <span
+                                                    style={{ color: "#64748b" }}
+                                                  >
+                                                    Masuk Trip:{" "}
+                                                    <b
+                                                      style={{
+                                                        color:
+                                                          allocated > 0
+                                                            ? "#2563eb"
+                                                            : "#94a3b8",
+                                                      }}
+                                                    >
+                                                      {allocated.toLocaleString(
+                                                        "id-ID",
+                                                      )}
+                                                    </b>
+                                                  </span>
+                                                  <span
+                                                    style={{ color: "#64748b" }}
+                                                  >
+                                                    Sisa:{" "}
+                                                    <b
+                                                      style={{
+                                                        color: sisaColor,
+                                                      }}
+                                                    >
+                                                      {sisa.toLocaleString(
+                                                        "id-ID",
+                                                      )}
+                                                    </b>
+                                                  </span>
+                                                </>
+                                              )}
                                               <span
                                                 style={{ color: "#64748b" }}
                                               >
