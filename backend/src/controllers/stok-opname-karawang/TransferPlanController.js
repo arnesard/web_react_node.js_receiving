@@ -288,8 +288,7 @@ class TransferPlanController {
           );
         }
 
-        const gedung =
-          ControlStockModel.deriveGedungFromLokasi(lokasiTangerang);
+        const gedung = ControlStockModel.deriveGedungFromLokasi(lokasiTangerang);
 
         return {
           ...item,

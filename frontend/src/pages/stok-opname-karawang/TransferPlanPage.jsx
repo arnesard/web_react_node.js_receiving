@@ -3213,7 +3213,6 @@ export default function TransferPlanPage() {
                       const closePicker = () => {
                         setItemPickerOpenTripId(null);
                         setItemPickerSearch("");
-                        setOutsideItems([]);
                       };
                       const pickItem = (itemCode) => {
                         updateAddItemForm(trip.id, "itemCode", itemCode);
@@ -3374,7 +3373,8 @@ export default function TransferPlanPage() {
                                               fontStyle: "italic",
                                             }}
                                           >
-                                            {itemPickerSearch.trim().length >= 2
+                                            {itemPickerSearch.trim().length >=
+                                            2
                                               ? "Gak ada item yang cocok, baik dari request maupun master item."
                                               : "Gak ada item yang cocok. Ketik 2+ huruf buat sekalian cari item di luar request."}
                                           </div>
@@ -3497,7 +3497,9 @@ export default function TransferPlanPage() {
                                                     >
                                                       {Number(
                                                         it.qty || 0,
-                                                      ).toLocaleString("id-ID")}
+                                                      ).toLocaleString(
+                                                        "id-ID",
+                                                      )}
                                                     </b>
                                                   </span>
                                                   <span
