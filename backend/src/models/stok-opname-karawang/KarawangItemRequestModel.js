@@ -6,6 +6,15 @@ class KarawangItemReqModel {
   // dulu (dikosongkan total) sebelum data Excel yang baru dimasukkan —
   // jadi tabel selalu cuma isi upload TERAKHIR, gak numpuk sama upload
   // sebelumnya.
+  //
+  // CATATAN: sempat dicoba dikasih gate "harus Simpan Trip Plan dulu
+  // sebelum upload baru", tapi ternyata salah arah -- di lapangan operator
+  // upload request BARU (buat besok) itu independen dari masih ngedit
+  // trip HARI INI. Yang bener: trip yang udah di-generate+edit harus
+  // tetep bisa dibuka/diedit/dicetak lagi dari Riwayat kapan aja, gak
+  // peduli udah ada upload baru atau belum -- lihat
+  // KarawangTripPlanModel.bulkCreate (upsert by no_trip) buat gimana
+  // trip lama tetep bisa diedit ulang tanpa duplikat.
   static async bulkCreate(rows) {
     if (!rows || rows.length === 0) {
       return {
@@ -434,6 +443,57 @@ class KarawangItemReqModel {
         Math.max(capacity - trip.total_volume, 0).toFixed(3),
       ),
     }));
+  }
+
+  // Edit qty (dan opsional jenis/ket) 1 item di Item Request -- dipanggil
+  // dari tombol Edit di tabel Preview. Karena getTireTripItemsFromRequestOnly
+  // nge-GROUP baris mentah per kode item (bisa aja 1 item punya lebih dari 1
+  // baris upload kalau nyangkut dobel), cara paling aman biar hasilnya
+  // konsisten: hapus SEMUA baris item itu, ganti 1 baris baru pakai qty
+  // yang diedit -- bukan UPDATE baris mentahnya satu-satu (operator gak
+  // pernah lihat baris mentah, cuma lihat 1 baris per item di Preview).
+  static async updateItemQty(itemCode, { qty, jenis, ket }) {
+    const code = String(itemCode || "")
+      .trim()
+      .toUpperCase();
+    if (!code) throw new Error("Kode item tidak valid.");
+
+    const [existingRows] = await poolUtama.query(
+      `SELECT date, jenis, ket FROM stok_opname_karawang_item_req
+       WHERE TRIM(UPPER(item)) = ? LIMIT 1`,
+      [code],
+    );
+    if (!existingRows.length) {
+      const err = new Error("Item request tidak ditemukan.");
+      err.statusCode = 404;
+      throw err;
+    }
+    const base = existingRows[0];
+
+    await poolUtama.query(
+      "DELETE FROM stok_opname_karawang_item_req WHERE TRIM(UPPER(item)) = ?",
+      [code],
+    );
+    await poolUtama.query(
+      `INSERT INTO stok_opname_karawang_item_req (date, jenis, item, qty, ket)
+       VALUES (?, ?, ?, ?, ?)`,
+      [base.date, jenis ?? base.jenis ?? "", code, qty, ket ?? base.ket ?? ""],
+    );
+  }
+
+  // Hapus 1 item (semua baris mentahnya) dari Item Request -- tombol
+  // Hapus di tabel Preview.
+  static async deleteItem(itemCode) {
+    const code = String(itemCode || "")
+      .trim()
+      .toUpperCase();
+    if (!code) throw new Error("Kode item tidak valid.");
+
+    const [result] = await poolUtama.query(
+      "DELETE FROM stok_opname_karawang_item_req WHERE TRIM(UPPER(item)) = ?",
+      [code],
+    );
+    return result.affectedRows;
   }
 }
 

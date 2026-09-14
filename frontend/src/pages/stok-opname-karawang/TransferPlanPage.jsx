@@ -239,6 +239,68 @@ export default function TransferPlanPage() {
     }
   };
 
+  // Edit qty 1 item di Item Request (dari tombol ✏️ di tabel Preview) --
+  // ini ngedit data MENTAH-nya (stok_opname_karawang_item_req), bukan
+  // cuma tampilan, jadi kepake juga kalau nanti di-refresh/dibuka ulang.
+  const handleEditItemReq = async (item) => {
+    const { value: qty } = await Swal.fire({
+      title: `Edit Qty — ${item.item}`,
+      text: item.deskripsi || "",
+      input: "number",
+      inputValue: item.qty,
+      inputAttributes: { min: 1, step: 1 },
+      showCancelButton: true,
+      confirmButtonText: "Simpan",
+      cancelButtonText: "Batal",
+      inputValidator: (value) => {
+        if (!value || Number(value) <= 0) {
+          return "Qty harus angka lebih dari 0";
+        }
+      },
+    });
+    if (qty === undefined) return; // batal
+
+    try {
+      await api.post("/stok-opname-karawang/item-req/update-item", {
+        item: item.item,
+        qty: Number(qty),
+        jenis: item.jenis,
+      });
+      await Swal.fire({
+        icon: "success",
+        title: "Qty diperbarui",
+        timer: 1100,
+        showConfirmButton: false,
+      });
+      await Promise.all([loadSummaryItemReq(), loadPreview()]);
+    } catch (err) {
+      Swal.fire("Gagal", err.response?.data?.message || err.message, "error");
+    }
+  };
+
+  // Hapus 1 item dari Item Request (tombol 🗑️ di tabel Preview).
+  const handleDeleteItemReq = async (item) => {
+    const result = await Swal.fire({
+      title: "Hapus Item Request?",
+      html: `Yakin hapus <b>${item.item}</b> (${item.deskripsi || "-"}) dari Item Request? Item ini bakal ilang dari Preview & gak bisa dimasukin ke trip lagi sampai diupload ulang.`,
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Hapus",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#dc3545",
+    });
+    if (!result.isConfirmed) return;
+
+    try {
+      await api.post("/stok-opname-karawang/item-req/delete-item", {
+        item: item.item,
+      });
+      await Promise.all([loadSummaryItemReq(), loadPreview()]);
+    } catch (err) {
+      Swal.fire("Gagal", err.response?.data?.message || err.message, "error");
+    }
+  };
+
   useEffect(() => {
     loadSummaryItemReq();
     loadPreview();
@@ -1788,6 +1850,72 @@ export default function TransferPlanPage() {
       setLoadingHistory(false);
     }
   };
+
+  // Buka 1 trip dari Riwayat buat DIEDIT LAGI -- dimuat balik ke daftar
+  // "Trip Aktif" (manualTrips), pakai UI builder yang sama kayak bikin
+  // trip baru (tambah/hapus item, ganti truk, dst). Pas "Simpan Trip
+  // Plan" diklik lagi, baris lama punya no_trip yang sama otomatis
+  // KEGANTI (bukan numpuk dobel) -- lihat KarawangTripPlanModel.bulkCreate.
+  //
+  // CATATAN: kolom stok_tangerang gak ikut kesimpen ke tabel histori
+  // (cuma ada di working state sebelum disimpan), jadi kolom STOK pas
+  // dicetak ulang abis diedit dari sini bisa kosong buat item yang gak
+  // disentuh -- item yang BARU ditambahin pas edit ini bakal keisi normal.
+  const handleEditHistoryTrip = (trip) => {
+    const newTrip = {
+      id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      no_trip: trip.no_trip,
+      truck: trip.truck || null,
+      kapasitas: trip.kapasitas || undefined,
+      items: (trip.items || []).map((it) => ({
+        item: it.item,
+        deskripsi: it.deskripsi,
+        qty: Number(it.qty || 0),
+        volume: Number(it.volume || 0),
+        total_volume: Number(it.total_volume || 0),
+        gedung: it.gedung || null,
+        stok_tangerang: it.stok_tangerang ?? null,
+      })),
+    };
+
+    setManualTrips((prev) => [...prev, newTrip]);
+    setShowHistoryModal(false);
+
+    Swal.fire({
+      icon: "info",
+      title: "Trip dimuat buat diedit",
+      html: `<b>${trip.no_trip}</b> udah dimuat ke daftar Trip Aktif — edit seperlunya, lalu klik <b>"Simpan Trip Plan"</b> lagi buat nyimpen perubahannya (otomatis nimpa data lama, gak dobel).`,
+      confirmButtonText: "Oke",
+    });
+  };
+
+  // Hapus 1 trip dari Riwayat (tombol 🗑️).
+  const handleDeleteHistoryTrip = async (trip) => {
+    const result = await Swal.fire({
+      title: "Hapus Trip?",
+      html: `Yakin hapus <b>${trip.no_trip}</b> dari Riwayat Trip Plan? Semua item di trip ini ikut kehapus.`,
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Hapus",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#dc3545",
+    });
+    if (!result.isConfirmed) return;
+
+    try {
+      await api.post("/stok-opname-karawang/trip-plan/delete", {
+        no_trip: trip.no_trip,
+        tanggal: String(trip.tanggal).slice(0, 10),
+      });
+      await loadTripPlanHistory();
+    } catch (err) {
+      Swal.fire(
+        "Gagal Menghapus",
+        err.response?.data?.message || err.message,
+        "error",
+      );
+    }
+  };
   const resetManualTripPlan = async () => {
     const result = await Swal.fire({
       title: "Reset Semua Trip?",
@@ -2465,6 +2593,7 @@ export default function TransferPlanPage() {
                       <th style={{ whiteSpace: "nowrap" }}>Gedung</th>
                       <th style={{ whiteSpace: "nowrap" }}>Stok Tangerang</th>
                       <th style={{ whiteSpace: "nowrap" }}>Stok Karawang</th>
+                      <th style={{ whiteSpace: "nowrap" }}>Aksi</th>
                     </tr>
                   </thead>
 
@@ -2547,6 +2676,39 @@ export default function TransferPlanPage() {
                             {Number(item.stok_karawang || 0).toLocaleString(
                               "id-ID",
                             )}
+                          </td>
+
+                          <td
+                            className="no-print"
+                            style={{
+                              textAlign: "center",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              className="btn-row-action"
+                              title="Edit qty"
+                              style={{
+                                background: "#dbeafe",
+                                color: "#1d4ed8",
+                              }}
+                              onClick={() => handleEditItemReq(item)}
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-row-action"
+                              title="Hapus"
+                              style={{
+                                background: "#fee2e2",
+                                color: "#dc2626",
+                              }}
+                              onClick={() => handleDeleteItemReq(item)}
+                            >
+                              🗑️
+                            </button>
                           </td>
                         </tr>
                       );
@@ -3373,8 +3535,7 @@ export default function TransferPlanPage() {
                                               fontStyle: "italic",
                                             }}
                                           >
-                                            {itemPickerSearch.trim().length >=
-                                            2
+                                            {itemPickerSearch.trim().length >= 2
                                               ? "Gak ada item yang cocok, baik dari request maupun master item."
                                               : "Gak ada item yang cocok. Ketik 2+ huruf buat sekalian cari item di luar request."}
                                           </div>
@@ -3497,9 +3658,7 @@ export default function TransferPlanPage() {
                                                     >
                                                       {Number(
                                                         it.qty || 0,
-                                                      ).toLocaleString(
-                                                        "id-ID",
-                                                      )}
+                                                      ).toLocaleString("id-ID")}
                                                     </b>
                                                   </span>
                                                   <span
@@ -4315,6 +4474,76 @@ export default function TransferPlanPage() {
                             </div>
                           </div>
                         </button>
+
+                        <div
+                          className="no-print"
+                          style={{
+                            display: "flex",
+                            gap: 6,
+                            padding: "8px 14px",
+                            borderTop: "1px solid #e2e8f0",
+                            background: "#fff",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleEditHistoryTrip(trip)}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 4,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              color: "#1d4ed8",
+                              background: "#dbeafe",
+                              border: "1px solid #bfdbfe",
+                              borderRadius: 6,
+                              padding: "5px 10px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            ✏️ Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handlePrintRmb(trip)}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 4,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              color: "#0f172a",
+                              background: "#f1f5f9",
+                              border: "1px solid #cbd5e1",
+                              borderRadius: 6,
+                              padding: "5px 10px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            🖨️ Cetak RMB
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteHistoryTrip(trip)}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 4,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              color: "#dc2626",
+                              background: "#fee2e2",
+                              border: "1px solid #fecaca",
+                              borderRadius: 6,
+                              padding: "5px 10px",
+                              cursor: "pointer",
+                              marginLeft: "auto",
+                            }}
+                          >
+                            🗑️ Hapus
+                          </button>
+                        </div>
 
                         {isExpanded && (
                           <div style={{ padding: "10px 14px" }}>

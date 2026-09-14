@@ -288,7 +288,8 @@ class TransferPlanController {
           );
         }
 
-        const gedung = ControlStockModel.deriveGedungFromLokasi(lokasiTangerang);
+        const gedung =
+          ControlStockModel.deriveGedungFromLokasi(lokasiTangerang);
 
         return {
           ...item,
@@ -489,6 +490,80 @@ class TransferPlanController {
       console.error("TransferPlanController.tripPlanHistory gagal:", err);
 
       return response.error(res, "Gagal mengambil histori Trip Plan.");
+    }
+  }
+
+  // POST /trip-plan/delete { no_trip, tanggal } — Hapus 1 trip dari
+  // Riwayat (tombol 🗑️ di modal Riwayat Trip Plan).
+  async deleteTripPlan(req, res) {
+    try {
+      const { no_trip, tanggal } = req.body || {};
+      if (!no_trip || !tanggal) {
+        return response.error(res, "no_trip dan tanggal wajib diisi.", 422);
+      }
+      const affected = await KarawangTripPlanModel.removeTrip(no_trip, tanggal);
+      if (!affected) {
+        return response.notFound(res, "Trip tidak ditemukan.");
+      }
+      return response.success(res, null, "Trip berhasil dihapus.");
+    } catch (err) {
+      console.error("TransferPlanController.deleteTripPlan gagal:", err);
+      return response.error(res, err.message || "Gagal menghapus trip.");
+    }
+  }
+  // GET /item-req/batch-status — gak dipake lagi (gate upload udah
+  // dicabut, lihat catatan di KarawangItemRequestModel.bulkCreate), tapi
+  // dibiarin ada buat kompatibilitas kalau ada caller lama.
+  async batchStatus(req, res) {
+    return response.success(res, { committed: true });
+  }
+
+  // POST /item-req/update-item — tombol Edit di tabel Preview (edit qty
+  // 1 item, by kode item bukan by id -- lihat KarawangItemRequestModel.updateItemQty).
+  async updateItemRequestItem(req, res) {
+    try {
+      const { item, qty, jenis, ket } = req.body || {};
+      if (!item) {
+        return response.error(res, "Kode item wajib diisi.", 422);
+      }
+      const qtyNum = Number(qty);
+      if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
+        return response.error(res, "Qty harus berupa angka lebih dari 0.", 422);
+      }
+      await KarawangItemRequestModel.updateItemQty(item, {
+        qty: qtyNum,
+        jenis,
+        ket,
+      });
+      return response.success(res, null, "Item request berhasil diperbarui.");
+    } catch (err) {
+      console.error("TransferPlanController.updateItemRequestItem gagal:", err);
+      return response.error(
+        res,
+        err.message || "Gagal memperbarui item request.",
+        err.statusCode || 500,
+      );
+    }
+  }
+
+  // POST /item-req/delete-item — tombol Hapus di tabel Preview.
+  async deleteItemRequestItem(req, res) {
+    try {
+      const { item } = req.body || {};
+      if (!item) {
+        return response.error(res, "Kode item wajib diisi.", 422);
+      }
+      const affected = await KarawangItemRequestModel.deleteItem(item);
+      if (!affected) {
+        return response.notFound(res, "Item request tidak ditemukan.");
+      }
+      return response.success(res, null, "Item request berhasil dihapus.");
+    } catch (err) {
+      console.error("TransferPlanController.deleteItemRequestItem gagal:", err);
+      return response.error(
+        res,
+        err.message || "Gagal menghapus item request.",
+      );
     }
   }
 }

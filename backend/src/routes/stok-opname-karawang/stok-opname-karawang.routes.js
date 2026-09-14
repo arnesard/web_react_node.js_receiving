@@ -87,9 +87,24 @@ router.get(
 );
 
 router.get("/item-req/summary", TransferPlanController.itemRequestSummary);
+// Gate "harus Simpan Transfer Plan dulu sebelum upload baru" — dicek
+// frontend buat nampilin warning proaktif di tombol Upload.
+router.get("/item-req/batch-status", TransferPlanController.batchStatus);
+// Edit/Hapus 1 item di Item Request (dari tabel Preview) — pakai kode
+// item di body, bukan :id di path (item code bisa ada karakter aneh yang
+// nyusahin URL encoding).
+router.post(
+  "/item-req/update-item",
+  TransferPlanController.updateItemRequestItem,
+);
+router.post(
+  "/item-req/delete-item",
+  TransferPlanController.deleteItemRequestItem,
+);
 
 // Histori Trip Plan — simpan hasil trip plan + filter tanggal
 router.post("/trip-plan/save", TransferPlanController.saveTripPlan);
+router.post("/trip-plan/delete", TransferPlanController.deleteTripPlan);
 router.get("/trip-plan/history", TransferPlanController.tripPlanHistory);
 
 // Draft Trip Plan (kerjaan yang lagi disusun, belum "Simpan Trip Plan")

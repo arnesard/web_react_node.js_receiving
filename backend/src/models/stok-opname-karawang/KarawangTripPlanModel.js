@@ -9,6 +9,13 @@ class KarawangTripPlanModel {
   // Simpan banyak trip sekaligus (1 kali "Buat Trip Plan" = beberapa trip,
   // tiap trip punya beberapa item) — flatten jadi banyak baris item.
   // trips: [{ no_trip, kapasitas, truck, items: [{ item, deskripsi, qty, volume, total_volume }] }]
+  //
+  // UPSERT by no_trip: kalau no_trip yang disimpan udah ada sebelumnya
+  // (mis. trip dari Riwayat yang dibuka lagi buat diedit terus disimpan
+  // ulang), baris LAMA punya no_trip itu dihapus dulu sebelum baris baru
+  // dimasukin -- jadi hasil edit NGGANTI, bukan numpuk jadi duplikat.
+  // Format no_trip udah baked-in tanggal (T-2DDMMYYxxx) jadi aman dipakai
+  // sendiri tanpa perlu cocokin kolom tanggal juga.
   static async bulkCreate(trips) {
     if (!Array.isArray(trips) || trips.length === 0) {
       return 0;
@@ -17,6 +24,14 @@ class KarawangTripPlanModel {
     // Ambil tanggal dari sisi DB (bukan Date() di JS) biar konsisten sama
     // pola lain di modul ini (hindari selisih jam gara-gara device clock).
     const [[{ today }]] = await poolUtama.query(`SELECT CURDATE() AS today`);
+
+    const noTrips = trips.map((t) => t.no_trip).filter(Boolean);
+    if (noTrips.length) {
+      await poolUtama.query(
+        `DELETE FROM stok_opname_karawang_trip_plan WHERE no_trip IN (?)`,
+        [noTrips],
+      );
+    }
 
     const values = [];
     trips.forEach((trip) => {
