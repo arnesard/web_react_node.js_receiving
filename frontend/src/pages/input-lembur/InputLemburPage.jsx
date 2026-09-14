@@ -687,7 +687,7 @@ export default function Overtime() {
 
         .print-only { display: none; }
         @media print {
-          @page { size: landscape; margin: 6mm; }
+          @page { size: portrait; margin: 6mm; }
 
           .no-print { display: none !important; }
           .print-only { display: block !important; }
