@@ -64,6 +64,11 @@ export default function Overtime() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editData, setEditData] = useState(null);
 
+  // Tanggal-tanggal yang udah dicetak & dikunci (Set isi string "YYYY-MM-DD")
+  // — dikirim backend bareng data overtime (lihat OvertimeController.index),
+  // dipakai buat nge-gate form input & tombol Edit/Hapus.
+  const [lockedDates, setLockedDates] = useState(new Set());
+
   // Tanggal "hari ini" yang dipakai app, awalnya dari jam device (todayStr())
   // biar form langsung kepakai, lalu di-overwrite begitu server-time datang —
   // ini yang jadi sumber kebenaran, karena jam device (terutama scanner PDT
@@ -129,7 +134,8 @@ export default function Overtime() {
       const res = await api.get("/overtime", {
         params: { start_date: startDate, end_date: endDate },
       });
-      setOvertimes(res.data.data);
+      setOvertimes(res.data.data.items || []);
+      setLockedDates(new Set(res.data.data.locked_dates || []));
     } catch (err) {
       Swal.fire("Error", err.message, "error");
     } finally {
@@ -159,6 +165,15 @@ export default function Overtime() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (lockedDates.has(overtimeDate)) {
+      Swal.fire(
+        "Terkunci",
+        "Tanggal ini sudah dicetak & dikunci, tidak bisa menambah pengajuan lembur lagi.",
+        "warning",
+      );
+      return;
+    }
 
     let empId = employeeIdSelected;
     let empName = employeeName;
@@ -223,7 +238,11 @@ export default function Overtime() {
     }
     const totalJamNum = parseFloat(totalJamInput);
     if (!totalJamInput || isNaN(totalJamNum) || totalJamNum <= 0) {
-      Swal.fire("Peringatan", "Total Jam Lembur wajib diisi angka lebih dari 0.", "warning");
+      Swal.fire(
+        "Peringatan",
+        "Total Jam Lembur wajib diisi angka lebih dari 0.",
+        "warning",
+      );
       return;
     }
 
@@ -282,7 +301,11 @@ export default function Overtime() {
     e.preventDefault();
     const totalJamNum = parseFloat(editData.total_jam);
     if (!editData.total_jam || isNaN(totalJamNum) || totalJamNum <= 0) {
-      Swal.fire("Peringatan", "Total Jam Lembur wajib diisi angka lebih dari 0.", "warning");
+      Swal.fire(
+        "Peringatan",
+        "Total Jam Lembur wajib diisi angka lebih dari 0.",
+        "warning",
+      );
       return;
     }
     try {
@@ -299,7 +322,7 @@ export default function Overtime() {
       setShowEditModal(false);
       loadOvertimes();
     } catch (err) {
-      Swal.fire("Error", err.message, "error");
+      Swal.fire("Error", err.response?.data?.message || err.message, "error");
     }
   };
 
@@ -318,8 +341,81 @@ export default function Overtime() {
       await api.delete(`/overtime/${ot.id}`);
       loadOvertimes();
     } catch (err) {
-      Swal.fire("Error", err.message, "error");
+      Swal.fire("Error", err.response?.data?.message || err.message, "error");
     }
+  };
+
+  // window.print() dipanggil kepepet pas SweetAlert masih proses animasi
+  // nutup bisa nyetak halaman blank (browser "motret" tampilan sebelum
+  // DOM-nya beres di-restore/reflow). Kasih jeda dikit dulu biar aman.
+  const printAfterSettle = () => {
+    requestAnimationFrame(() => {
+      setTimeout(() => window.print(), 300);
+    });
+  };
+
+  const handlePrintClick = async () => {
+    if (!filteredOvertimes.length) {
+      Swal.fire("Info", "Belum ada data lembur untuk dicetak.", "info");
+      return;
+    }
+
+    // Kunci SEMUA tanggal yang lagi tampil di laporan (bukan cuma yang
+    // match filter nama pencarian) — soalnya yang dicetak itu 1 lembar
+    // laporan periode startDate s/d endDate, bukan per-baris.
+    const uniqueDates = [
+      ...new Set(overtimes.map((ot) => toJakartaDateString(ot.overtime_date))),
+    ];
+    const alreadyLocked = uniqueDates.every((d) => lockedDates.has(d));
+
+    // Kalau semua tanggal di periode ini udah kekunci dari sebelumnya,
+    // gak perlu minta password lagi — langsung print aja.
+    if (alreadyLocked) {
+      printAfterSettle();
+      return;
+    }
+
+    const { value: password } = await Swal.fire({
+      title: "Konfirmasi Cetak",
+      html: `Mencetak akan MENGUNCI ${uniqueDates.length} tanggal (${uniqueDates
+        .slice()
+        .sort()
+        .join(
+          ", ",
+        )}) — setelah ini data lembur di tanggal tsb tidak bisa ditambah/diedit/dihapus lagi.<br/><br/>Masukkan password untuk melanjutkan:`,
+      input: "password",
+      inputPlaceholder: "Password",
+      showCancelButton: true,
+      confirmButtonText: "Kunci & Cetak",
+      cancelButtonText: "Batal",
+      confirmButtonColor: "#0ea5e9",
+      inputValidator: (value) => (!value ? "Password wajib diisi" : undefined),
+      preConfirm: async (value) => {
+        try {
+          await api.post("/overtime/lock-dates", {
+            dates: uniqueDates,
+            password: value,
+          });
+          return value;
+        } catch (err) {
+          Swal.showValidationMessage(
+            err.response?.data?.message || err.message,
+          );
+          return false;
+        }
+      },
+    });
+
+    if (!password) return; // batal, atau preConfirm gagal
+
+    setLockedDates((prev) => new Set([...prev, ...uniqueDates]));
+    await Swal.fire({
+      icon: "success",
+      title: "Tanggal terkunci!",
+      timer: 1100,
+      showConfirmButton: false,
+    });
+    printAfterSettle();
   };
 
   const filteredEmployees = employees.filter(
@@ -332,6 +428,13 @@ export default function Overtime() {
     (ot) =>
       !search || ot.displayName.toLowerCase().includes(search.toLowerCase()),
   );
+
+  // Cek 1 baris data udah kekunci apa belum (dipakai buat nyembunyiin
+  // tombol Edit/Hapus), dan cek tanggal yang lagi dipilih di FORM input
+  // (dipakai buat nge-block submit sebelum sempet kirim ke backend).
+  const isRowLocked = (ot) =>
+    lockedDates.has(toJakartaDateString(ot.overtime_date));
+  const isFormDateLocked = lockedDates.has(overtimeDate);
 
   const exportExcel = () => {
     if (filteredOvertimes.length === 0) {
@@ -779,6 +882,20 @@ export default function Overtime() {
                 onChange={(e) => setOvertimeDate(e.target.value)}
                 required
               />
+              {isFormDateLocked && (
+                <div
+                  style={{
+                    marginTop: 6,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "#dc2626",
+                  }}
+                >
+                  🔒 Tanggal ini sudah dicetak & dikunci, apabila ingin
+                  melakukan perubahan atau keterlambatan pengajuan hubungi
+                  admin.
+                </div>
+              )}
             </div>
 
             <div className="field-row-2">
@@ -787,7 +904,7 @@ export default function Overtime() {
                 <input
                   type="text"
                   inputMode="numeric"
-                  placeholder="HH:MM"
+                  placeholder="00:00"
                   maxLength={5}
                   pattern="^([01]\d|2[0-3]):[0-5]\d$"
                   className="field-input"
@@ -803,7 +920,7 @@ export default function Overtime() {
                 <input
                   type="text"
                   inputMode="numeric"
-                  placeholder="HH:MM"
+                  placeholder="00:00"
                   maxLength={5}
                   pattern="^([01]\d|2[0-3]):[0-5]\d$"
                   className="field-input"
@@ -845,7 +962,7 @@ export default function Overtime() {
             <button
               type="submit"
               className="btn-submit-ot"
-              disabled={submitting}
+              disabled={submitting || isFormDateLocked}
             >
               {submitting ? "⏳ Mengirim..." : "📤 Ajukan Lembur"}
             </button>
@@ -881,7 +998,7 @@ export default function Overtime() {
                   📊 Export Excel
                 </button>
                 <button
-                  onClick={() => window.print()}
+                  onClick={handlePrintClick}
                   style={{
                     padding: "8px 16px",
                     borderRadius: 10,
@@ -981,18 +1098,38 @@ export default function Overtime() {
                         })}
                       </div>
                       <div className="ot-actions no-print">
-                        <button
-                          style={{ background: "#dbeafe", color: "#1d4ed8" }}
-                          onClick={() => openEdit(ot)}
-                        >
-                          ✏️ Edit
-                        </button>
-                        <button
-                          style={{ background: "#fee2e2", color: "#dc2626" }}
-                          onClick={() => handleDelete(ot)}
-                        >
-                          🗑️ Hapus
-                        </button>
+                        {isRowLocked(ot) ? (
+                          <span
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 700,
+                              color: "#64748b",
+                            }}
+                          >
+                            🔒 Terkunci (sudah dicetak)
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              style={{
+                                background: "#dbeafe",
+                                color: "#1d4ed8",
+                              }}
+                              onClick={() => openEdit(ot)}
+                            >
+                              ✏️ Edit
+                            </button>
+                            <button
+                              style={{
+                                background: "#fee2e2",
+                                color: "#dc2626",
+                              }}
+                              onClick={() => handleDelete(ot)}
+                            >
+                              🗑️ Hapus
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1062,28 +1199,39 @@ export default function Overtime() {
                               whiteSpace: "nowrap",
                             }}
                           >
-                            <button
-                              className="btn-row-action"
-                              title="Edit"
-                              style={{
-                                background: "#dbeafe",
-                                color: "#1d4ed8",
-                              }}
-                              onClick={() => openEdit(ot)}
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              className="btn-row-action"
-                              title="Hapus"
-                              style={{
-                                background: "#fee2e2",
-                                color: "#dc2626",
-                              }}
-                              onClick={() => handleDelete(ot)}
-                            >
-                              🗑️
-                            </button>
+                            {isRowLocked(ot) ? (
+                              <span
+                                title="Sudah dicetak & dikunci"
+                                style={{ fontSize: 16 }}
+                              >
+                                🔒
+                              </span>
+                            ) : (
+                              <>
+                                <button
+                                  className="btn-row-action"
+                                  title="Edit"
+                                  style={{
+                                    background: "#dbeafe",
+                                    color: "#1d4ed8",
+                                  }}
+                                  onClick={() => openEdit(ot)}
+                                >
+                                  ✏️
+                                </button>
+                                <button
+                                  className="btn-row-action"
+                                  title="Hapus"
+                                  style={{
+                                    background: "#fee2e2",
+                                    color: "#dc2626",
+                                  }}
+                                  onClick={() => handleDelete(ot)}
+                                >
+                                  🗑️
+                                </button>
+                              </>
+                            )}
                           </td>
                         </tr>
                       ))}

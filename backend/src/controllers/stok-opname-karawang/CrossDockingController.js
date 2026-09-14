@@ -5,6 +5,7 @@
 // dan balikin hasilnya apa adanya — gak ngubah bentuk datanya, biar
 // field apapun yang dibalikin API itu tetap kepake di frontend.
 const CrossDockingClient = require("../../services/crossDockingClient");
+const KarawangEdpModel = require("../../models/stok-opname-karawang/KarawangEdpModel");
 const { getField } = require("../../utils/apiField");
 const {
   enrichWithBcCollie,
@@ -192,6 +193,142 @@ class CrossDockingController {
       console.error("CrossDockingController.detail gagal:", err);
       res.status(502).json({
         message: err.message || "Gagal mengambil data detail Cross Docking",
+      });
+    }
+  }
+
+  // Normalisasi kode lokasi buat dibandingin — trim, uppercase, dan buang
+  // semua karakter selain alfanumerik (spasi/strip/underscore beda dikit
+  // gak dianggap beda lokasi). Dipake biar loccode yang diketik operator
+  // gak harus persis sama format-nya kayak yang tersimpan di Cross Docking.
+  static _normalizeLoc(val) {
+    return (val || "")
+      .toString()
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
+  }
+
+  // GET /cross-docking/location?loccode=XXX (+ optional item/rackcode/
+  // barcode/week buat mempersempit) — cari LOKASI: isinya rackcode apa,
+  // item apa, dan qty berapa (dihitung dari jumlah baris/pcs), buat operator
+  // yang mau tau "rak ini isinya apa aja" tanpa perlu tau rackcode/item
+  // duluan. Cross Docking API sendiri gak nyediain filter loccode
+  // langsung, jadi caranya: tarik detail-all (dipersempit filter lain kalau
+  // ada, atau full pull kalau kosong sama sekali — sama kayak pola
+  // checkbox "Detail" yang udah ada), terus filter+group loccode-nya di
+  // sini. Deskripsi item di-join dari db pandu (Cross Docking gak
+  // nyediain), sama kayak fitur-fitur lain di project ini.
+  static async locationSearch(req, res) {
+    try {
+      const loccode = (req.query.loccode || "").trim();
+      if (!loccode) {
+        return res.status(400).json({
+          message: "Parameter loccode wajib diisi.",
+        });
+      }
+
+      const filters = filtersFromQuery(req.query);
+      // Kalau operator gak isi filter lain (item/rackcode/barcode/week),
+      // paksa full pull (detail:true) — satu-satunya cara nyisir semua
+      // loccode tanpa filter tambahan, konsisten sama checkbox "Detail"
+      // yang udah ada di halaman ini.
+      if (!hasAnyFilter(filters)) {
+        filters.detail = true;
+      }
+
+      const rows = await CrossDockingClient.fetchDetailAll(filters);
+      const target = CrossDockingController._normalizeLoc(loccode);
+
+      // Kumpulin loccode unik yang beneran ADA (buat matching normalized
+      // DAN buat debug kalau gak ketemu — biar keliatan format aslinya
+      // apa aja, tanpa perlu buka network tab).
+      const seenLoc = new Map(); // normalized -> raw pertama yang ketemu
+      (rows || []).forEach((row) => {
+        const raw = (getField(row, "loccode") || "").toString().trim();
+        if (!raw) return;
+        const norm = CrossDockingController._normalizeLoc(raw);
+        if (!seenLoc.has(norm)) seenLoc.set(norm, raw);
+      });
+
+      // Prefix match (bukan cocok persis) — "DCK01-A" bakal nangkep semua
+      // lokasi yang DIAWALI itu (mis. DCK01-A01, DCK01-A02, dst), berguna
+      // buat nyari 1 blok/baris rak sekaligus tanpa perlu ketik kode
+      // lengkap tiap lokasi.
+      const matched = (rows || []).filter((row) => {
+        const rowLoc = (getField(row, "loccode") || "").toString().trim();
+        return CrossDockingController._normalizeLoc(rowLoc).startsWith(target);
+      });
+
+      // Group per loccode+rackcode+item (bukan cuma rackcode+item) — kalau
+      // yang dicari itu prefix (nangkep beberapa lokasi sekaligus), tiap
+      // lokasi tetep keliatan terpisah, gak numpuk jadi 1 angka qty yang
+      // nyampur beberapa lokasi. Sekalian catet curweek PALING TUA
+      // (format "YYWW", makin kecil = makin tua) per grup, buat bantu
+      // liat FIFO — barang mana yang paling lama ngendon di rak itu.
+      const groups = new Map(); // key `${loc}|${rackcode}|${item}` -> { loc, rackcode, item, qty, curweekTertua }
+      matched.forEach((row) => {
+        const loc = (getField(row, "loccode") || "").toString().trim();
+        const rackcode = (getField(row, "rackcode") || "").toString().trim();
+        const item = (getField(row, "item") || "").toString().trim();
+        if (!rackcode || !item) return;
+        const key = `${loc}|${rackcode}|${item}`;
+        const curweek = (getField(row, "curweek") || "").toString().trim();
+        if (!groups.has(key)) {
+          groups.set(key, { loc, rackcode, item, qty: 0, curweekTertua: "" });
+        }
+        const g = groups.get(key);
+        g.qty += 1;
+        // "YYWW" ASC — string comparison udah cukup selama formatnya
+        // konsisten 4 digit zero-padded (curweek kosong diabaikan).
+        if (curweek && (!g.curweekTertua || curweek < g.curweekTertua)) {
+          g.curweekTertua = curweek;
+        }
+      });
+
+      const groupedRows = [...groups.values()];
+
+      let descrMap = new Map();
+      try {
+        descrMap = await KarawangEdpModel.descriptionsForItems(
+          groupedRows.map((g) => g.item),
+        );
+      } catch (err) {
+        console.error(
+          "CrossDockingController.locationSearch: gagal ambil deskripsi dari db pandu:",
+          err,
+        );
+      }
+
+      const data = groupedRows
+        .map((g) => ({
+          loccode: g.loc,
+          rackcode: g.rackcode,
+          item: g.item,
+          deskripsi: descrMap.get(g.item) || "-",
+          qty: g.qty,
+          curweek_tertua: g.curweekTertua || "-",
+        }))
+        .sort(
+          (a, b) =>
+            a.loccode.localeCompare(b.loccode) ||
+            a.rackcode.localeCompare(b.rackcode) ||
+            a.item.localeCompare(b.item),
+        );
+
+      // Kalau gak ketemu sama sekali, sertain sample loccode yang beneran
+      // ada di data ini (maks 8) — buat bantu operator/dev cocokin format
+      // (dash, spasi, dll) tanpa harus buka log server.
+      const meta = { totalPcs: matched.length, totalRowsFetched: rows.length };
+      if (!matched.length) {
+        meta.sampleLoccodes = [...seenLoc.values()].slice(0, 8);
+      }
+
+      res.json({ data, loccode, meta });
+    } catch (err) {
+      console.error("CrossDockingController.locationSearch gagal:", err);
+      res.status(502).json({
+        message: err.message || "Gagal mencari data lokasi di Cross Docking",
       });
     }
   }

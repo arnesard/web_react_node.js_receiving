@@ -31,7 +31,7 @@ import { karawangStyles } from "./karawangStyles";
 // Modal detail per-item: nama operator yang scan, qty, item & deskripsinya.
 // Sebelumnya info operator ini nempel langsung di card (bikin sesak di
 // layar penuh item) — sekarang dipindah ke sini, muncul pas card diklik.
-function ItemDetailModal({ item, onClose, onEdit }) {
+function ItemDetailModal({ item, onClose, onEdit, onExport, exporting }) {
   const detail = item.detail || [];
   return (
     <div className="ko-cd-modal-backdrop" onClick={onClose}>
@@ -42,14 +42,42 @@ function ItemDetailModal({ item, onClose, onEdit }) {
       >
         <div className="ko-cd-modal-header">
           <h2>{item.item}</h2>
-          <button
-            type="button"
-            className="ko-cd-modal-close"
-            onClick={onClose}
-            aria-label="Tutup"
-          >
-            <X size={18} />
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button
+              type="button"
+              title="Export Excel (collie & barcode)"
+              disabled={exporting}
+              onClick={() => onExport(item)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                background: "#f0fdf4",
+                border: "1px solid #bbf7d0",
+                borderRadius: 6,
+                padding: "5px 10px",
+                fontSize: 12,
+                fontWeight: 600,
+                color: "#16a34a",
+                cursor: exporting ? "wait" : "pointer",
+              }}
+            >
+              {exporting ? (
+                <Loader2 size={13} className="ko-spin" />
+              ) : (
+                <FileSpreadsheet size={13} />
+              )}
+              Export Excel
+            </button>
+            <button
+              type="button"
+              className="ko-cd-modal-close"
+              onClick={onClose}
+              aria-label="Tutup"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
         <div className="ko-cd-modal-body">
           <div className="ko-modal-detail-row">
@@ -1069,40 +1097,7 @@ export default function KarawangDashboardPage() {
                   <div
                     key={it.item}
                     className={`ko-item-card ko-item-card-${status}`}
-                    style={{ position: "relative" }}
                   >
-                    <button
-                      type="button"
-                      className="ko-item-card-export-btn"
-                      title="Export Excel (collie & barcode)"
-                      disabled={exportingItem === it.item}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleExportItem(it);
-                      }}
-                      style={{
-                        position: "absolute",
-                        top: 6,
-                        right: 6,
-                        zIndex: 1,
-                        background: "rgba(255,255,255,0.9)",
-                        border: "1px solid #e2e8f0",
-                        borderRadius: 6,
-                        width: 24,
-                        height: 24,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        cursor: exportingItem === it.item ? "wait" : "pointer",
-                        color: "#16a34a",
-                      }}
-                    >
-                      {exportingItem === it.item ? (
-                        <Loader2 size={13} className="ko-spin" />
-                      ) : (
-                        <FileSpreadsheet size={13} />
-                      )}
-                    </button>
                     <button
                       type="button"
                       className="ko-item-card-body"
@@ -1157,6 +1152,8 @@ export default function KarawangDashboardPage() {
           item={selectedItem}
           onClose={() => setSelectedItem(null)}
           onEdit={handleEditRak}
+          onExport={handleExportItem}
+          exporting={exportingItem === selectedItem.item}
         />
       )}
       {showVarianceModal && full?.items && (

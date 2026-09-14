@@ -7,5 +7,6 @@ router.get("/", OvertimeController.index);
 router.post("/", OvertimeController.store);
 router.put("/:id", OvertimeController.update);
 router.delete("/:id", OvertimeController.destroy);
+router.post("/lock-dates", OvertimeController.lockDates);
 
 module.exports = router;

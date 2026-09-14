@@ -567,6 +567,157 @@ function RowDetailModal({ pair, rows, loading, error, onClose }) {
   );
 }
 
+// Kolom tabel hasil cari Lokasi — beda dari DETAIL_ALL_COLUMNS (yang per
+// pcs/baris), ini udah digroup per rackcode+item sama backend
+// (CrossDockingController.locationSearch), jadi ada kolom Qty.
+const LOCATION_COLUMNS = [
+  { key: "loccode", label: "Lokasi" },
+  { key: "rackcode", label: "Rackcode" },
+  { key: "item", label: "Item" },
+  { key: "deskripsi", label: "Deskripsi" },
+  { key: "curweek_tertua", label: "Curweek Tertua" },
+  { key: "qty", label: "Qty" },
+];
+
+// Modal "Cari Lokasi" — operator masukin kode loccode, hasilnya rackcode +
+// item + deskripsi + qty apa aja yang ada di lokasi itu (digroup dari
+// data Cross Docking). Bisa langsung dicetak (window.print, pola sama
+// kayak Cetak RMB di TransferPlanPage).
+function LocationModal({
+  loccode,
+  onLoccodeChange,
+  onSearch,
+  onClose,
+  onPrint,
+  loading,
+  error,
+  rows,
+  searched,
+  sampleHint,
+}) {
+  const showTable = rows !== null && rows.length > 0;
+  return (
+    <div className="ko-cd-modal-backdrop" onClick={onClose}>
+      <div className="ko-cd-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="ko-cd-modal-header">
+          <h2>Cari Lokasi</h2>
+          <button
+            type="button"
+            className="ko-cd-modal-close"
+            onClick={onClose}
+            aria-label="Tutup"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="ko-cd-modal-body">
+          <div
+            className="ko-cd-modal-toolbar"
+            style={{
+              justifyContent: "flex-start",
+              alignItems: "center",
+              gap: 8,
+              flexWrap: "wrap",
+            }}
+          >
+            <input
+              className="ko-text-input"
+              value={loccode}
+              onChange={(e) => onLoccodeChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onSearch();
+              }}
+              placeholder="Kode lokasi, bisa prefix (mis. DCK01-A)"
+              style={{ flex: "1 1 200px", width: "auto", margin: 0 }}
+              autoFocus
+            />
+            <button
+              type="button"
+              className="ko-btn-primary"
+              onClick={onSearch}
+              disabled={loading || !loccode.trim()}
+              style={{
+                width: "auto",
+                margin: 0,
+                padding: "10px 18px",
+                flexShrink: 0,
+              }}
+            >
+              {loading ? (
+                <Loader2 size={16} className="ko-spin" />
+              ) : (
+                <Layers size={16} />
+              )}
+              Cari
+            </button>
+            {showTable && (
+              <button
+                type="button"
+                className="ko-btn-secondary ko-btn-download"
+                onClick={onPrint}
+                style={{ width: "auto", flexShrink: 0 }}
+              >
+                <Printer size={16} /> Print
+              </button>
+            )}
+          </div>
+
+          {loading && (
+            <div className="ko-empty">
+              <Loader2 size={20} className="ko-spin" /> Mencari data lokasi...
+            </div>
+          )}
+
+          {!loading && error && <div className="ko-cd-error">{error}</div>}
+
+          {!loading && !error && searched && !showTable && (
+            <div className="ko-empty">
+              Gak ada barang ditemukan di lokasi ini.
+              {sampleHint && sampleHint.length > 0 && (
+                <div style={{ marginTop: 10, fontSize: 12, color: "#64748b" }}>
+                  Contoh kode lokasi yang ada di data (cek formatnya, mungkin
+                  beda sama yang lo ketik):
+                  <br />
+                  {sampleHint.join(", ")}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!loading && !error && showTable && (
+            <div className="ko-cd-modal-table-scroll">
+              <table className="ko-data-table">
+                <thead>
+                  <tr>
+                    {LOCATION_COLUMNS.map((col) => (
+                      <th key={col.key}>{col.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, idx) => (
+                    <tr key={idx}>
+                      {LOCATION_COLUMNS.map((col) => (
+                        <td
+                          key={col.key}
+                          className={col.key === "qty" ? "ko-mono" : undefined}
+                        >
+                          {formatCellValue(row[col.key])}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatsGrid({ totals }) {
   if (!totals) return null;
   const entries = Object.entries(totals).filter(
@@ -621,6 +772,16 @@ export default function CrossDockingPage() {
   const [rowDetailRows, setRowDetailRows] = useState(null);
   const [rowDetailLoading, setRowDetailLoading] = useState(false);
   const [rowDetailError, setRowDetailError] = useState("");
+
+  // Modal "Cari Lokasi" — cari isi 1 lokasi (loccode), independen dari
+  // filter Item/Rackcode/Barcode/Week di halaman utama.
+  const [showLocationModal, setShowLocationModal] = useState(false);
+  const [locationCode, setLocationCode] = useState("");
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [locationError, setLocationError] = useState("");
+  const [locationRows, setLocationRows] = useState(null); // null = belum pernah cari
+  const [locationSearched, setLocationSearched] = useState(false);
+  const [locationSampleHint, setLocationSampleHint] = useState([]); // contoh loccode kalau gak ketemu
 
   const setFilterField = (key) => (e) =>
     setFilters((prev) => ({ ...prev, [key]: e.target.value }));
@@ -713,6 +874,169 @@ export default function CrossDockingPage() {
     }
   };
 
+  // Cari isi 1 lokasi (loccode) — independen dari filter halaman utama,
+  // jalan lewat CrossDockingController.locationSearch di backend.
+  const handleLocationSearch = async () => {
+    const kode = locationCode.trim();
+    if (!kode) return;
+    setLocationLoading(true);
+    setLocationError("");
+    setLocationSearched(false);
+    setLocationSampleHint([]);
+    try {
+      const res = await api.get(
+        "/stok-opname-karawang/cross-docking/location",
+        { params: { loccode: kode } },
+      );
+      setLocationRows(res.data?.data || []);
+      setLocationSampleHint(res.data?.meta?.sampleLoccodes || []);
+    } catch (err) {
+      setLocationRows(null);
+      setLocationError(
+        err.response?.data?.message ||
+          "Gagal mencari data lokasi. Cek koneksi jaringan / kredensial CROSS_DOCKING_* di backend.",
+      );
+    } finally {
+      setLocationLoading(false);
+      setLocationSearched(true);
+    }
+  };
+
+  // Cetak hasil cari lokasi — window.print di tab baru, pola sama kayak
+  // Cetak RMB di TransferPlanPage (buildRmbPrintHtml). 1 tabel menyatu
+  // (bukan per halaman), tapi tiap ganti LOKASI dikasih warna
+  // selang-seling (zebra per grup, bukan per baris) + nomor urut reset
+  // dari 1 lagi tiap lokasi — biar batas antar lokasi keliatan jelas
+  // walau tabelnya nyambung terus dari 1 lokasi ke lokasi lain (prefix
+  // search bisa nangkep beberapa lokasi sekaligus, lihat locationSearch
+  // di backend).
+  const handlePrintLocation = () => {
+    if (!locationRows || !locationRows.length) return;
+
+    // Group per loccode — locationRows udah kesortir loccode asc dari
+    // backend, jadi tinggal kelompokin baris yang loccode-nya berurutan
+    // sama.
+    const groups = [];
+    locationRows.forEach((r) => {
+      const loc = r.loccode || "-";
+      const last = groups[groups.length - 1];
+      if (last && last.loccode === loc) {
+        last.rows.push(r);
+      } else {
+        groups.push({ loccode: loc, rows: [r] });
+      }
+    });
+
+    const rowsHtml = groups
+      .map((group, gIdx) => {
+        const shade = gIdx % 2 === 0 ? "shade-a" : "shade-b";
+        const bodyRows = group.rows
+          .map(
+            (r, idx) => `
+      <tr class="${shade}">
+        <td class="c">${idx + 1}</td>
+        <td>${r.loccode || ""}</td>
+        <td>${r.rackcode || ""}</td>
+        <td>${r.item || ""}</td>
+        <td>${r.deskripsi || ""}</td>
+        <td class="c">${r.curweek_tertua || "-"}</td>
+        <td class="r">${Number(r.qty || 0).toLocaleString("id-ID")}</td>
+      </tr>`,
+          )
+          .join("");
+        const subtotalQty = group.rows.reduce(
+          (sum, r) => sum + (r.qty || 0),
+          0,
+        );
+        const subtotalRow = `
+      <tr class="${shade} subtotal">
+        <td class="c"></td>
+        <td colspan="4"></td>
+        <td>Subtotal ${group.loccode}</td>
+        <td class="r">${subtotalQty.toLocaleString("id-ID")}</td>
+      </tr>`;
+        return bodyRows + subtotalRow;
+      })
+      .join("");
+
+    const totalQty = locationRows.reduce((sum, r) => sum + (r.qty || 0), 0);
+    const now = new Date();
+    const cetakPada = `${String(now.getDate()).padStart(2, "0")}/${String(
+      now.getMonth() + 1,
+    ).padStart(2, "0")}/${now.getFullYear()} ${String(now.getHours()).padStart(
+      2,
+      "0",
+    )}:${String(now.getMinutes()).padStart(2, "0")}`;
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Lokasi ${locationCode}</title>
+<style>
+  @page { size: A4 portrait; margin: 14mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #1e293b; font-size: 12px; margin: 0; }
+  .company { font-weight: 700; font-size: 15px; }
+  .addr { font-size: 11px; margin-bottom: 12px; }
+  h1 { font-size: 15px; margin: 10px 0 2px; }
+  .meta { font-size: 11px; color: #475569; margin-bottom: 14px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border: 1px solid #cbd5e1; padding: 5px 8px; font-size: 11px; }
+  th { background: #f1f5f9; text-align: left; }
+  td.c { text-align: center; width: 32px; }
+  td.r, th.r { text-align: right; }
+  tr.shade-a td { background: #ffffff; }
+  tr.shade-b td { background: #eef2ff; }
+  tr.subtotal td { font-weight: 700; border-top: 1.5px solid #94a3b8; background: #f8fafc !important; }
+  tr.grand-total td { font-weight: 700; border-top: 2px solid #94a3b8; background: #e2e8f0 !important; }
+</style>
+</head>
+<body>
+  <div class="company">PT. GAJAH TUNGGAL TBK</div>
+  <div class="addr">Gudang Ban Motor — DC Karawang</div>
+  <h1>Isi Lokasi: ${locationCode}</h1>
+  <div class="meta">Dicetak: ${cetakPada}</div>
+  <table>
+    <thead>
+      <tr>
+        <th class="c">No</th>
+        <th>Lokasi</th>
+        <th>Rackcode</th>
+        <th>Item</th>
+        <th>Deskripsi</th>
+        <th class="c">Curweek Tertua</th>
+        <th class="r">Qty</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}
+      <tr class="grand-total">
+        <td class="c"></td>
+        <td colspan="4"></td>
+        <td>Grand Total</td>
+        <td class="r">${totalQty.toLocaleString("id-ID")}</td>
+      </tr>
+    </tbody>
+  </table>
+</body>
+</html>`;
+
+    const printWindow = window.open("", "_blank", "width=1000,height=800");
+    if (!printWindow) {
+      setLocationError(
+        "Gagal membuka jendela cetak. Pastikan popup tidak diblokir browser.",
+      );
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.onload = () => {
+      printWindow.focus();
+      printWindow.print();
+    };
+  };
+
   // Klik baris di tabel Ringkasan Stock -> buka modal detail per
   // rackcode+item (rackcode, item, curweek, collie, barcode, last update,
   // age krw). Data ditarik on-demand (bukan sekaligus buat semua baris)
@@ -798,9 +1122,23 @@ export default function CrossDockingPage() {
             web Cross Docking.
           </p>
         </div>
-        <Link to="/karawang/fifo" className="ko-btn-primary ko-cd-fifo-btn">
-          <ArrowDownWideNarrow size={16} /> Control FIFO
-        </Link>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            className="ko-btn-secondary"
+            onClick={() => {
+              setShowLocationModal(true);
+              setLocationRows(null);
+              setLocationSearched(false);
+              setLocationError("");
+            }}
+          >
+            <Layers size={16} /> Location
+          </button>
+          <Link to="/karawang/fifo" className="ko-btn-primary ko-cd-fifo-btn">
+            <ArrowDownWideNarrow size={16} /> Control FIFO
+          </Link>
+        </div>
       </div>
 
       <div className="ko-card">
@@ -1014,6 +1352,21 @@ export default function CrossDockingPage() {
           loading={rowDetailLoading}
           error={rowDetailError}
           onClose={() => setRowDetailPair(null)}
+        />
+      )}
+
+      {showLocationModal && (
+        <LocationModal
+          loccode={locationCode}
+          onLoccodeChange={setLocationCode}
+          onSearch={handleLocationSearch}
+          onClose={() => setShowLocationModal(false)}
+          onPrint={handlePrintLocation}
+          loading={locationLoading}
+          error={locationError}
+          rows={locationRows}
+          searched={locationSearched}
+          sampleHint={locationSampleHint}
         />
       )}
     </div>
