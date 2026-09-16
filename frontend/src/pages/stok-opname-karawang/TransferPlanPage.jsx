@@ -122,6 +122,26 @@ export default function TransferPlanPage() {
     return found?.tanggal_request || null;
   }, [previewItems]);
 
+  // Tanggal "sesi kerja" Trip Manual yang lagi aktif -- SEMUA trip yang
+  // digenerate/ditambah manual di sesi ini nempel ke tanggal ini. User
+  // bisa ganti tanggal ini kapan aja (misal pilih "kemarin") buat MEMUAT
+  // BALIK trip yang udah pernah di-generate+edit+simpan di tanggal itu,
+  // biar bisa diedit ulang / ditambah item / dicetak RMB lagi -- tanpa
+  // perlu buka modal Riwayat Trip Plan. Default: hari ini.
+  const [tripManualDate, setTripManualDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+      2,
+      "0",
+    )}-${String(d.getDate()).padStart(2, "0")}`;
+  });
+  const [loadingTripManualDate, setLoadingTripManualDate] = useState(false);
+  // Nyimpen tanggal upload terakhir yang UDAH di-auto-sync ke selector --
+  // biar auto-sync cuma jalan sekali per tanggal upload yang bener-bener
+  // baru, dan gak maksa balik nimpa tanggal yang udah SENGAJA dipilih
+  // manual (misal lagi buka "kemarin" yang emang kosong datanya).
+  const lastAutoSyncedUploadTanggal = useRef(null);
+
   // ============ MANUAL TRIP BUILDER ============
   // manualTrips: [{ id, no_trip, items: [{item, deskripsi, qty, volume, total_volume}] }]
   const [manualTrips, setManualTrips] = useState([]);
@@ -130,6 +150,26 @@ export default function TransferPlanPage() {
   // gak ilang selamanya dari pilihan cuma gara-gara lagi gak dipake.
   const [maxTruckSlot, setMaxTruckSlot] = useState(1);
   // Loading state khusus tombol "Rencana Transfer" (auto-generate trip).
+
+  // Auto-sync tanggal selector Trip Manual ke tanggal Item Request yang
+  // baru diupload -- SUPAYA trip baru yang digenerate gak ke-tag tanggal
+  // yang salah (misal selector kelewat masih "kemarin" padahal Item
+  // Request-nya buat "besok" -> trip ke-simpen ke histori dengan tanggal
+  // yang salah walau RMB-nya sendiri tetep bener karena ambil dari
+  // tanggal_request item). Cuma auto-sync kalau: (1) ini tanggal upload
+  // yang beneran baru (belum pernah di-auto-sync), DAN (2) belum ada trip
+  // yang lagi disusun (manualTrips kosong) -- biar gak nimpa sesi
+  // kerja/tanggal yang udah dipilih user.
+  useEffect(() => {
+    if (!uploadTanggal) return;
+    const normalized = String(uploadTanggal).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return;
+    if (lastAutoSyncedUploadTanggal.current === normalized) return;
+    if (manualTrips.length > 0) return;
+
+    lastAutoSyncedUploadTanggal.current = normalized;
+    setTripManualDate(normalized);
+  }, [uploadTanggal, manualTrips.length]);
   const [loadingRencanaTransfer, setLoadingRencanaTransfer] = useState(false);
   // Kapasitas 1 truk (m³) — dipakai buat ngecek trip udah "muat" apa belum.
   // Default 52 m³, samain sama default kapasitas di buildTireTrips backend.
@@ -836,6 +876,7 @@ export default function TransferPlanPage() {
             bestTrip = {
               id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${seq}`,
               no_trip: generateManualDoNumber(seq),
+              tanggal: tripManualDate,
               gedung,
               items: [],
               _volume: 0,
@@ -1200,6 +1241,7 @@ export default function TransferPlanPage() {
       {
         id,
         no_trip: generateManualDoNumber(prev.length + 1),
+        tanggal: tripManualDate,
         truck: `Truk ${nextSlot}`,
         items: [],
       },
@@ -1491,11 +1533,11 @@ export default function TransferPlanPage() {
       .split("\n")
       .join("<br/>");
     // TGL KIRIM / DATE di RMB harus ikut tanggal Item Request yang
-    // di-upload (bukan tanggal/jam pas user klik cetak) -- ambil dari
-    // tanggal_request item pertama di trip yang punya nilai (kalau
-    // beberapa item beda tanggal, dianggap gak wajar dan tetep pakai yang
-    // pertama ketemu). Fallback ke tanggal hari ini kalau data lama
-    // (sebelum fix ini) belum kebawa tanggal_request-nya sama sekali.
+    // di-upload (bukan tanggal/jam pas user klik cetak, ATAU tanggal
+    // selector "Tanggal" di Trip Manual). Ambil dari tanggal_request item
+    // pertama di trip yang punya nilai -- baru kalau item-nya gak punya
+    // tanggal_request sama sekali (misal data draft lama / item ditambah
+    // manual), fallback ke trip.tanggal (tanggal sesi kerja Trip Manual).
     const formatTanggal = (val) => {
       if (val && /^\d{4}-\d{2}-\d{2}/.test(String(val))) {
         const [yyyy, mm, dd] = String(val).slice(0, 10).split("-");
@@ -1506,9 +1548,8 @@ export default function TransferPlanPage() {
         d.getMonth() + 1,
       ).padStart(2, "0")}/${d.getFullYear()}`;
     };
-    const requestTanggal = items.find(
-      (it) => it.tanggal_request,
-    )?.tanggal_request;
+    const requestTanggal =
+      items.find((it) => it.tanggal_request)?.tanggal_request || trip.tanggal;
     const today = formatTanggal(requestTanggal) || formatTanggal(new Date());
     const maxWeek = getCurrentWeekCode();
     const noKirimBarcodeSvg = renderNoKirimBarcodeSvg(trip.no_trip);
@@ -1776,20 +1817,32 @@ export default function TransferPlanPage() {
   };
 
   // Simpan semua trip manual yang lagi dibuat ke histori (DB) — No Trip,
-  // item, qty, dan total volume tiap trip.
-  const handleSaveManualTripPlan = async () => {
+  // item, qty, dan total volume tiap trip. Dipisah dari tombol
+  // "Simpan Trip Plan" (handleSaveManualTripPlan) biar bisa dipanggil
+  // ulang dari popup "Ganti Tanggal" (lihat handleTripManualDateChange)
+  // -- return status-nya biar alur ganti tanggal tau harus lanjut apa
+  // enggak.
+  //
+  // `silent`: true kalau dipanggil dari alur lain yang udah nangani
+  // dialognya sendiri (skip alert "Belum Ada Data" & toast sukses di
+  // sini, biar gak dobel popup).
+  const saveManualTripPlan = async ({ silent = false } = {}) => {
     const tripsToSave = manualTrips.filter((t) => t.items.length > 0);
 
     if (!tripsToSave.length) {
-      Swal.fire(
-        "Belum Ada Data",
-        "Masukkan minimal 1 item ke trip dulu sebelum disimpan.",
-        "warning",
-      );
-      return;
+      if (!silent) {
+        Swal.fire(
+          "Belum Ada Data",
+          "Masukkan minimal 1 item ke trip dulu sebelum disimpan.",
+          "warning",
+        );
+      }
+      // Gak ada yang perlu disimpan -- dianggap "sukses" (gak ada resiko
+      // kehilangan data) biar alur ganti tanggal boleh lanjut.
+      return { success: true, hadData: false };
     }
 
-    if (savingTripPlan) return;
+    if (savingTripPlan) return { success: false, hadData: true };
 
     setSavingTripPlan(true);
 
@@ -1797,34 +1850,43 @@ export default function TransferPlanPage() {
       const res = await api.post("/stok-opname-karawang/trip-plan/save", {
         trips: tripsToSave.map((t) => ({
           do_number: t.no_trip,
+          tanggal: t.tanggal || null,
           truck: t.truck || null,
           items: t.items,
         })),
       });
 
-      await Swal.fire({
-        icon: "success",
-        title: "Trip Plan Tersimpan",
-        text:
-          res.data?.data?.message || "Trip Plan berhasil disimpan ke histori.",
-        timer: 2200,
-        showConfirmButton: false,
-      });
+      if (!silent) {
+        await Swal.fire({
+          icon: "success",
+          title: "Trip Plan Tersimpan",
+          text:
+            res.data?.data?.message ||
+            "Trip Plan berhasil disimpan ke histori.",
+          timer: 2200,
+          showConfirmButton: false,
+        });
+      }
 
       setManualTrips([]);
       setMaxTruckSlot(1);
 
       await Promise.all([loadSummaryItemReq(), loadPreview()]);
+
+      return { success: true, hadData: true };
     } catch (err) {
       Swal.fire(
         "Gagal Menyimpan",
         err.response?.data?.message || err.message,
         "error",
       );
+      return { success: false, hadData: true };
     } finally {
       setSavingTripPlan(false);
     }
   };
+
+  const handleSaveManualTripPlan = () => saveManualTripPlan();
 
   // Ambil histori Trip Plan (Filter Riwayat) berdasarkan rentang tanggal.
   const loadTripPlanHistory = async () => {
@@ -1865,6 +1927,7 @@ export default function TransferPlanPage() {
     const newTrip = {
       id: `trip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       no_trip: trip.no_trip,
+      tanggal: trip.tanggal ? String(trip.tanggal).slice(0, 10) : undefined,
       truck: trip.truck || null,
       kapasitas: trip.kapasitas || undefined,
       items: (trip.items || []).map((it) => ({
@@ -1887,6 +1950,84 @@ export default function TransferPlanPage() {
       html: `<b>${trip.no_trip}</b> udah dimuat ke daftar Trip Aktif — edit seperlunya, lalu klik <b>"Simpan Trip Plan"</b> lagi buat nyimpen perubahannya (otomatis nimpa data lama, gak dobel).`,
       confirmButtonText: "Oke",
     });
+  };
+
+  // Ganti tanggal "sesi kerja" Trip Manual -- misal user pilih tanggal
+  // KEMARIN, semua trip yang udah pernah di-generate+edit+SIMPAN di
+  // tanggal itu (dari tabel histori) langsung dimuat balik ke daftar Trip
+  // Aktif, siap diedit ulang / ditambah item / dicetak RMB lagi -- gak
+  // perlu lagi bolak-balik buka modal Riwayat Trip Plan.
+  //
+  // Kalau tanggal itu belum ada trip yang tersimpan, daftar Trip Aktif
+  // bakal kosong (siap dipakai generate/tambah trip baru buat tanggal
+  // itu).
+  const handleTripManualDateChange = async (newDate) => {
+    if (!newDate || newDate === tripManualDate) return;
+
+    setLoadingTripManualDate(true);
+
+    try {
+      // Auto-save dulu trip yang lagi aktif (kalau ada) sebelum tanggal
+      // diganti -- silent:true biar gak ada popup nanya-nanya, langsung
+      // kesimpen di belakang layar.
+      if (manualTrips.length > 0) {
+        const { success } = await saveManualTripPlan({ silent: true });
+
+        if (!success) {
+          // Gagal auto-save -- BATALIN ganti tanggal biar data yang lagi
+          // aktif gak ke-timpa/ilang. User bisa coba lagi manual.
+          Swal.fire(
+            "Gagal Auto-Save",
+            'Trip Plan yang lagi aktif gagal disimpan otomatis, jadi tanggal belum jadi diganti. Coba klik "Simpan Trip Plan" manual, atau ulangi ganti tanggalnya.',
+            "error",
+          );
+          return;
+        }
+      }
+
+      const res = await api.get("/stok-opname-karawang/trip-plan/history", {
+        params: { dateFrom: newDate, dateTo: newDate },
+      });
+      const rows = res.data?.data || [];
+
+      const loaded = rows.map((trip) => ({
+        id: `trip-${trip.no_trip}-${String(trip.tanggal).slice(0, 10)}`,
+        no_trip: trip.no_trip,
+        tanggal: String(trip.tanggal).slice(0, 10),
+        truck: trip.truck || null,
+        kapasitas: trip.kapasitas || undefined,
+        items: (trip.items || []).map((it) => ({
+          item: it.item,
+          deskripsi: it.deskripsi,
+          qty: Number(it.qty || 0),
+          volume: Number(it.volume || 0),
+          total_volume: Number(it.total_volume || 0),
+          gedung: it.gedung || null,
+          stok_tangerang: it.stok_tangerang ?? null,
+        })),
+      }));
+
+      setManualTrips(loaded);
+      setTripManualDate(newDate);
+
+      if (!loaded.length) {
+        Swal.fire({
+          icon: "info",
+          title: "Belum Ada Trip Tersimpan",
+          text: `Belum ada Trip Plan tersimpan buat tanggal ${newDate}. Silakan generate lewat "Rencana Transfer" atau "Tambah Trip Baru".`,
+          timer: 2400,
+          showConfirmButton: false,
+        });
+      }
+    } catch (err) {
+      Swal.fire(
+        "Gagal Memuat Trip",
+        err.response?.data?.message || err.message,
+        "error",
+      );
+    } finally {
+      setLoadingTripManualDate(false);
+    }
   };
 
   // Hapus 1 trip dari Riwayat (tombol 🗑️).
@@ -2750,6 +2891,38 @@ export default function TransferPlanPage() {
             >
               Trip Manual
             </h2>
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 11,
+                color: "#64748b",
+                fontWeight: 600,
+              }}
+            >
+              Tanggal
+              <input
+                type="date"
+                value={tripManualDate}
+                disabled={loadingTripManualDate}
+                onChange={(e) => handleTripManualDateChange(e.target.value)}
+                title="Pilih tanggal buat muat balik trip yang udah pernah digenerate/disimpan di tanggal itu (edit ulang, tambah item, cetak RMB lagi)"
+                style={{
+                  height: 26,
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 6,
+                  padding: "0 6px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: "#0f172a",
+                }}
+              />
+              {loadingTripManualDate && (
+                <Loader2 size={13} className="ko-spin" />
+              )}
+            </label>
 
             <label
               style={{

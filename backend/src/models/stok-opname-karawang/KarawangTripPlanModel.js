@@ -35,10 +35,15 @@ class KarawangTripPlanModel {
 
     const values = [];
     trips.forEach((trip) => {
+      // Tanggal per trip: pakai yang diedit user di kartu Trip Manual
+      // (trip.tanggal, format YYYY-MM-DD dari <input type="date">), kalau
+      // gak dikirim baru fallback ke tanggal hari ini (CURDATE()).
+      const tripTanggal = trip.tanggal || today;
+
       (trip.items || []).forEach((item) => {
         values.push([
           trip.no_trip,
-          today,
+          tripTanggal,
           Number(trip.kapasitas || 0),
           trip.truck || null,
           item.item,

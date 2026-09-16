@@ -385,6 +385,7 @@ class TransferPlanController {
         no_trip:
           trip.do_number ||
           KarawangItemRequestModel.generateDoNumber(trip.trip || idx + 1),
+        tanggal: trip.tanggal || null,
         kapasitas: kapasitas || trip.kapasitas,
         truck: trip.truck || null,
         items: Array.isArray(trip.items)
