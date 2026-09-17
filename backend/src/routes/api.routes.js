@@ -25,6 +25,9 @@ router.use(
   require("./stok-opname-karawang/stok-opname-karawang.routes"),
 );
 
+// ── Barcode Tracer ──
+router.use("/barcode-tracer", require("./barcode/barcode-tracer.routes"));
+
 // ── Shared ──
 router.use("/system", require("./shared/system.routes"));
 

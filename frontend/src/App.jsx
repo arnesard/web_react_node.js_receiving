@@ -20,6 +20,7 @@ import KarawangBarcode from "./pages/stok-opname-karawang/BarcodePage";
 import KarawangCrossDocking from "./pages/stok-opname-karawang/CrossDockingPage";
 import KarawangFifo from "./pages/stok-opname-karawang/FifoPage";
 import KarawangTransferPlan from "./pages/stok-opname-karawang/TransferPlanPage";
+import BarcodeTracer from "./pages/barcode/BarcodeTracerPage";
 import "./App.css";
 
 const currentUser = { name: "Admin GT" };
@@ -52,6 +53,7 @@ function LayoutRoutes() {
           path="/karawang/transfer-plan"
           element={<KarawangTransferPlan />}
         />
+        <Route path="/barcode" element={<BarcodeTracer />} />
       </Routes>
     </AppLayout>
   );

@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 // Halaman yang TIDAK menampilkan navbar menu (Dashboard/Input/Laporan)
-const HIDE_NAV_ON = ["/overtime", "/employees", "/transfer", "/karawang", "/control-stock"];
+const HIDE_NAV_ON = ["/overtime", "/employees", "/transfer", "/karawang", "/control-stock", "/barcode"];
 
 const NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard", icon: <LayoutDashboard size={16} /> },
@@ -32,7 +32,8 @@ export default function AppLayout({ children, user }) {
   const hideHeader =
     location.pathname.startsWith("/transfer") ||
     location.pathname.startsWith("/karawang") ||
-    location.pathname.startsWith("/control-stock");
+    location.pathname.startsWith("/control-stock") ||
+    location.pathname.startsWith("/barcode");
 
   return (
     <>
