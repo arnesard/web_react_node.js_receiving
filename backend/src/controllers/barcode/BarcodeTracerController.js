@@ -62,10 +62,21 @@ class BarcodeTracerController {
         ),
       ];
 
-      const [doScanMap, operatorMap] = await Promise.all([
-        BarcodeTracerModel.getDoScanInfo(uniqueBarcodes),
-        BarcodeTracerModel.getOperatorInfo(uniquePics),
-      ]);
+      // Ambil do_scan dulu, baru kumpulin kode operator DO-nya buat ikut
+      // di-lookup ke bcmcfgv1.oprbld (kode operator do_scan != pic timeline,
+      // makanya harus dikumpulin terpisah lalu digabung ke satu lookup)
+      const doScanMap = await BarcodeTracerModel.getDoScanInfo(uniqueBarcodes);
+
+      const uniqueDoOperatorCodes = Object.values(doScanMap)
+        .map((v) => String(v.operator || "").trim())
+        .filter((v) => v && v !== "-");
+
+      const uniqueOperatorCodes = [
+        ...new Set([...uniquePics, ...uniqueDoOperatorCodes]),
+      ];
+
+      const operatorMap =
+        await BarcodeTracerModel.getOperatorInfo(uniqueOperatorCodes);
 
       // 5. Mapping final
       const finalData = combinedResults.map((row) => {
@@ -79,7 +90,12 @@ class BarcodeTracerController {
           doNumber = scanData.do_number;
           customerName = scanData.cust_name;
           customerCity = scanData.cust_city;
-          doOperator = scanData.operator;
+          const cleanDoOprCode = String(scanData.operator || "").trim();
+          const doOprData = operatorMap[cleanDoOprCode];
+          doOperator =
+            cleanDoOprCode && doOprData && doOprData.nama !== "-"
+              ? `${cleanDoOprCode} ${doOprData.nama}`
+              : scanData.operator;
         }
 
         const cleanPic = String(row.pic || "").trim();
@@ -105,8 +121,7 @@ class BarcodeTracerController {
       console.error("BarcodeTracerController.searchBarcode gagal:", error);
       return response.error(
         res,
-        "Terjadi kesalahan pada server saat mencari barcode. " +
-          error.message,
+        "Terjadi kesalahan pada server saat mencari barcode. " + error.message,
       );
     }
   }

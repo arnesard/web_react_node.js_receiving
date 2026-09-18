@@ -144,7 +144,9 @@ export default function BarcodeTracerPage() {
       // Backend selalu bungkus response {status, message, data}
       const payload = res.data?.data;
       let rows = payload?.data || [];
-      rows.sort((a, b) => parseScanTime(a.scantime) - parseScanTime(b.scantime));
+      rows.sort(
+        (a, b) => parseScanTime(a.scantime) - parseScanTime(b.scantime),
+      );
       setDataResult(rows);
       setSortDirection("asc");
     } catch (err) {
@@ -212,7 +214,8 @@ export default function BarcodeTracerPage() {
         const isCustomer = String(r.loc_to).toUpperCase().includes("CUSTOMER");
         if (r.do_number && r.do_number !== "-") doNumber = r.do_number;
         if (r.customer && r.customer !== "-") customerName = r.customer;
-        if (r.customer_city && r.customer_city !== "-") cityName = r.customer_city;
+        if (r.customer_city && r.customer_city !== "-")
+          cityName = r.customer_city;
         if (r.do_operator && r.do_operator !== "-") doOperator = r.do_operator;
         nodes.push({
           location: r.loc_to || "-",
@@ -261,8 +264,7 @@ export default function BarcodeTracerPage() {
             <div>
               <span>Total Item Terlacak</span>
               <strong>
-                {groupedTracking.length}{" "}
-                <em>PCS</em>
+                {groupedTracking.length} <em>PCS</em>
               </strong>
             </div>
           </div>
@@ -307,8 +309,8 @@ export default function BarcodeTracerPage() {
           <Barcode size={40} color="#475569" />
           <h3>Barcode Tidak Ditemukan</h3>
           <p>
-            Tidak ada jejak mutasi untuk barcode{" "}
-            <strong>{barcodeInput}</strong>.
+            Tidak ada jejak mutasi untuk barcode <strong>{barcodeInput}</strong>
+            .
           </p>
         </div>
       )}
@@ -420,7 +422,6 @@ export default function BarcodeTracerPage() {
                   <table className="bt-table">
                     <thead>
                       <tr>
-                        <th>Sumber DB</th>
                         <th>Item</th>
                         <th>Deskripsi</th>
                         <th className="bt-center">Collie</th>
@@ -446,18 +447,10 @@ export default function BarcodeTracerPage() {
                     </thead>
                     <tbody>
                       {group.tableRows.map((row, rIdx) => {
-                        const isDC = String(row.source_db).includes("DC");
                         return (
                           <tr key={rIdx}>
-                            <td>
-                              <span
-                                className={`bt-source-badge ${isDC ? "bt-source-dc" : "bt-source-plant"}`}
-                              >
-                                {row.source_db}
-                              </span>
-                            </td>
                             <td className="bt-strong">{row.item}</td>
-                            <td>{row.description}</td>
+                            <td className="bt-wrap">{row.description}</td>
                             <td className="bt-center bt-mono">
                               {row.bc_entried_prod || "-"}
                             </td>
@@ -479,7 +472,9 @@ export default function BarcodeTracerPage() {
                             <td>
                               <span
                                 className={`bt-loc-badge ${
-                                  String(row.loc_to).toUpperCase().includes("CUSTOMER")
+                                  String(row.loc_to)
+                                    .toUpperCase()
+                                    .includes("CUSTOMER")
                                     ? "bt-loc-customer"
                                     : ""
                                 }`}
@@ -490,7 +485,7 @@ export default function BarcodeTracerPage() {
                             <td className="bt-center bt-mono bt-muted">
                               {row.pic || "-"}
                             </td>
-                            <td className="bt-value-green">
+                            <td className="bt-value-green bt-wrap">
                               {row.nama !== "-" ? (
                                 <span className="bt-inline-icon">
                                   <UserCheck size={11} /> {row.nama}
@@ -515,15 +510,9 @@ export default function BarcodeTracerPage() {
                 {/* LIST DETAIL — mobile (kartu, bukan tabel lebar) */}
                 <div className="bt-mobile-list">
                   {group.tableRows.map((row, rIdx) => {
-                    const isDC = String(row.source_db).includes("DC");
                     return (
                       <div className="bt-mobile-row" key={rIdx}>
                         <div className="bt-mobile-row-head">
-                          <span
-                            className={`bt-source-badge ${isDC ? "bt-source-dc" : "bt-source-plant"}`}
-                          >
-                            {row.source_db}
-                          </span>
                           <span className="bt-mono">
                             {formatDateIndo(row.scantime)}
                           </span>
@@ -680,11 +669,12 @@ const btStyles = `
   font-size: 0.8rem; font-style: italic; text-align: center; padding: 10px 0; }
 
 .bt-table-title { font-size: 0.8rem; font-weight: 700; color: #0f172a; margin-bottom: 8px; }
-.bt-table-wrap { overflow-x: auto; border-radius: 10px; border: 1px solid #e2e8f0; background: #fff; }
-.bt-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.76rem; text-align: left; white-space: nowrap; }
+.bt-table-wrap { border-radius: 10px; border: 1px solid #e2e8f0; background: #fff; }
+.bt-table { width: 100%; table-layout: auto; border-collapse: separate; border-spacing: 0; font-size: 0.72rem; text-align: left; }
 .bt-table thead tr { color: #64748b; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }
-.bt-table th { padding: 9px 12px; font-weight: 700; text-transform: uppercase; }
-.bt-table td { padding: 7px 12px; border-bottom: 1px solid #f1f5f9; }
+.bt-table th { padding: 8px 6px; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+.bt-table td { padding: 6px 6px; border-bottom: 1px solid #f1f5f9; white-space: nowrap; }
+.bt-table td.bt-wrap { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .bt-table tbody tr:hover { background: #f8fafc; }
 .bt-center { text-align: center; }
 .bt-mono { font-family: 'Consolas', 'SFMono-Regular', monospace; color: #334155; }
