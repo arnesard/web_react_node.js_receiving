@@ -21,9 +21,15 @@ class KarawangCrossDockingModel {
     const kode = (rackcode || "").trim();
     if (!kode) return null;
 
+    // `detail: true` disertain juga di sini — pola bug yang sama kayak
+    // Control FIFO: tanpa flag ini field loccode dari API gak keisi bener,
+    // padahal `locations` di bawah dipakai buat validasi lokasi operator
+    // pas scan (KarawangController.scanRak), jadi ini bukan cuma soal
+    // tampilan, bisa bikin validasi lokasi salah kalau dibiarin.
     const rows = await CrossDockingClient.fetchDetailAll({
       rackcode: kode,
       filterMode: "all",
+      detail: true,
     });
     if (!rows || !rows.length) return null;
 

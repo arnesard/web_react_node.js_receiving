@@ -805,6 +805,23 @@ export default function CrossDockingPage() {
     detail: detailChecked ? "true" : undefined,
   });
 
+  // Reset semua filter, mode, dan hasil pencarian ke kondisi awal — bukan
+  // hapus data di Cross Docking (halaman ini cuma proxy baca, gak ada yang
+  // beneran dihapus), cuma bersihin apa yang lagi ditampilin di layar.
+  const handleClearAll = () => {
+    setFilters(EMPTY_FILTERS);
+    setViewMode("byRack");
+    setFilterMode("all");
+    setDetailChecked(false);
+    setLoaded(false);
+    setError("");
+    setSummaryRows([]);
+    setTotals(null);
+    setSummaryNote("");
+    setDetailRows(null);
+    setDetailNote("");
+  };
+
   const handleRefresh = async () => {
     setLoading(true);
     setError("");
@@ -1241,6 +1258,15 @@ export default function CrossDockingPage() {
               <RefreshCw size={16} />
             )}
             Refresh
+          </button>
+          <button
+            className="ko-btn-secondary ko-cd-clear-btn"
+            type="button"
+            onClick={handleClearAll}
+            disabled={loading}
+            title="Bersihkan filter & hasil pencarian di layar (bukan hapus data Cross Docking)"
+          >
+            <X size={16} /> Hapus
           </button>
         </div>
 

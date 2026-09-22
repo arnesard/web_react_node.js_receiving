@@ -134,6 +134,20 @@ export default function FifoPage() {
     if (activeItem) cariLokasi(activeItem, val);
   };
 
+  // Bersihkan pencarian & hasil di layar — Control FIFO ini juga baca
+  // live dari Cross Docking (lewat cariLokasi di atas), jadi bukan hapus
+  // data, cuma reset tampilan biar siap cari item lain dari kosong.
+  const handleClearFifo = () => {
+    setKeyword("");
+    setSuggestions([]);
+    setShowSuggest(false);
+    setActiveItem(null);
+    setResult(null);
+    setError("");
+    setFilterMode("all");
+    setExpandedLots(new Set());
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
     cariLokasi(keyword, filterMode);
@@ -166,6 +180,12 @@ export default function FifoPage() {
 
   const toggleBarcodeSearch = () => {
     setShowBarcodeSearch((v) => !v);
+    setBarcodeKeyword("");
+    setBarcodeResult(null);
+    setBarcodeError("");
+  };
+
+  const handleClearBarcodeSearch = () => {
     setBarcodeKeyword("");
     setBarcodeResult(null);
     setBarcodeError("");
@@ -237,6 +257,15 @@ export default function FifoPage() {
               ) : (
                 "Cari"
               )}
+            </button>
+            <button
+              type="button"
+              className="ko-btn-secondary fifo-clear-btn"
+              onClick={handleClearBarcodeSearch}
+              disabled={barcodeLoading || (!barcodeKeyword && !barcodeResult)}
+              title="Bersihkan pencarian & hasil"
+            >
+              <X size={16} /> Hapus
             </button>
           </form>
           <p className="fifo-barcode-hint">
@@ -316,6 +345,15 @@ export default function FifoPage() {
           />
           <button type="submit" className="ko-btn-primary fifo-search-btn" disabled={loading}>
             {loading ? <Loader2 size={16} className="ko-spin" /> : "Cari"}
+          </button>
+          <button
+            type="button"
+            className="ko-btn-secondary fifo-clear-btn"
+            onClick={handleClearFifo}
+            disabled={loading || (!keyword && !result)}
+            title="Bersihkan pencarian & hasil"
+          >
+            <X size={16} /> Hapus
           </button>
         </div>
 

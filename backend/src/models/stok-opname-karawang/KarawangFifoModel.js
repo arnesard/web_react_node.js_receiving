@@ -49,9 +49,15 @@ class KarawangFifoModel {
     if (!kode) return null;
     const kodeUpper = kode.toUpperCase();
 
+    // `detail: true` WAJIB disertain di sini — tanpa itu, API Cross Docking
+    // balikin baris yang lebih "ringkas" dan field loccode-nya kosong/null
+    // (persis gejala yang bikin kolom Lot selalu tampil "-"). Endpoint
+    // Halaman Barcode (KarawangController.getBarcodeLiveData) udah lebih
+    // dulu ketahuan butuh flag ini juga buat loccode-nya keisi bener.
     const rawRows = await CrossDockingClient.fetchDetailAll({
       item: kode,
       filterMode: filterMode || "all",
+      detail: true,
     });
 
     const deskripsi = await KarawangEdpModel.descriptionForItem(kode);
@@ -247,10 +253,12 @@ class KarawangFifoModel {
     }
 
     // Jalur 2: REST API, filter `barcode` (cepat kalau kebetulan server
-    // sumbernya beneran nyaring).
+    // sumbernya beneran nyaring). `detail: true` disertain juga di sini,
+    // sama alasannya kayak locationsByItem di atas — tanpa itu field
+    // loccode gak keisi bener buat hasil pencarian barcode ini.
     if (!rows.length) {
       rows = matchExact(
-        await CrossDockingClient.fetchDetailAll({ barcode: kode }),
+        await CrossDockingClient.fetchDetailAll({ barcode: kode, detail: true }),
       );
     }
 
@@ -322,6 +330,43 @@ class KarawangFifoModel {
         };
       }),
     );
+
+    // Backfill loccode kalau ada yang masih "-" — biasanya kejadian pas
+    // hasilnya dari jalur 1 (DB langsung, `SELECT *` dari fginvc_cd.rack_cd)
+    // yang ternyata gak punya kolom loccode/sejenisnya sama sekali (beda
+    // dari tabel/endpoint lain yang udah kekonfirmasi ada). Cuma 1 barcode
+    // yang dicari di sini, jadi aman nembak REST API sekali lagi (dengan
+    // detail:true) buat ngambil loccode-nya doang.
+    const missingLoccode = results.filter((r) => r.loccode === "-");
+    if (missingLoccode.length) {
+      try {
+        const detailRows = await CrossDockingClient.fetchDetailAll({
+          barcode: kode,
+          detail: true,
+        });
+        const matched = matchExact(detailRows);
+        if (matched.length) {
+          const fallbackLoccode = (getField(matched[0], "loccode") || "")
+            .toString()
+            .trim();
+          if (fallbackLoccode) {
+            missingLoccode.forEach((r) => {
+              r.loccode = fallbackLoccode;
+            });
+          } else {
+            console.log(
+              "[Control FIFO] Search Barcode: loccode tetap kosong walau udah fallback ke REST detail:true. Contoh key row:",
+              Object.keys(matched[0] || {}),
+            );
+          }
+        }
+      } catch (err) {
+        console.error(
+          "KarawangFifoModel.searchByBarcode: gagal fallback ambil loccode dari REST API:",
+          err,
+        );
+      }
+    }
 
     return results;
   }

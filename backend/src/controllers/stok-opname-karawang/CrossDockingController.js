@@ -64,7 +64,7 @@ class CrossDockingController {
       // rackcode sekaligus) — kalau masih kena skip juga, pesannya kebawa
       // ke frontend lewat meta.lastUpdateSkippedReason.
       const enriched = await enrichSummaryWithLastUpdate(data || [], {
-        maxPairs: 200,
+        maxPairs: 500,
       });
       res.json({
         data: enriched.rows,

@@ -21,6 +21,7 @@ import {
   MapPin,
   Layers,
   Home,
+  X,
 } from "lucide-react";
 import api from "../../api/axiosInstance";
 
@@ -160,6 +161,17 @@ export default function BarcodeTracerPage() {
     }
   };
 
+  // Bersihkan input & hasil pencarian di layar — halaman ini cuma nampilin
+  // riwayat mutasi (read-only dari Plant & DC Karawang), jadi ini bukan
+  // hapus data, cuma reset tampilan biar siap buat pencarian baru.
+  const handleClearSearch = () => {
+    setBarcodeInput("");
+    setDataResult([]);
+    setSearched(false);
+    setErrorMessage("");
+    setSortDirection("asc");
+  };
+
   const handleToggleSort = () => {
     const newDir = sortDirection === "asc" ? "desc" : "asc";
     setSortDirection(newDir);
@@ -294,6 +306,16 @@ export default function BarcodeTracerPage() {
               <span>Lacak Barcode</span>
             </>
           )}
+        </button>
+        <button
+          type="button"
+          className="bt-btn-hapus"
+          onClick={handleClearSearch}
+          disabled={loading || (!barcodeInput && !searched)}
+          title="Bersihkan input & hasil pencarian"
+        >
+          <X size={14} />
+          <span>Hapus</span>
         </button>
       </form>
 
@@ -611,6 +633,11 @@ const btStyles = `
   display: flex; align-items: center; justify-content: center; gap: 6px; }
 .bt-btn-cari:hover { background: #001a8f; }
 .bt-btn-cari:disabled { cursor: not-allowed; opacity: 0.7; }
+.bt-btn-hapus { flex-shrink: 0; height: 42px; padding: 0 18px; background: #fff;
+  color: #475569; border: 1px solid #cbd5e1; border-radius: 10px; font-weight: 700; font-size: 0.85rem; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 6px; }
+.bt-btn-hapus:hover { background: #f1f5f9; border-color: #94a3b8; }
+.bt-btn-hapus:disabled { cursor: not-allowed; opacity: 0.5; }
 .bt-spin { animation: bt-spin 0.8s linear infinite; }
 @keyframes bt-spin { to { transform: rotate(360deg); } }
 
@@ -710,6 +737,7 @@ const btStyles = `
   .bt-header h1 { font-size: 18px; }
   .bt-search-card { padding: 10px; }
   .bt-btn-cari { flex: 1 1 100%; }
+  .bt-btn-hapus { flex: 1 1 100%; }
   .bt-table-wrap { display: none; }
   .bt-mobile-list { display: flex; }
   .bt-timeline-card, .bt-delivery-card { flex: 1 1 100%; }
