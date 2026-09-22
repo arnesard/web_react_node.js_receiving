@@ -198,6 +198,45 @@ class KarawangFifoModel {
     };
   }
 
+  // Ambil loccol (lot) per rackcode dari fginvc_cd.fgloc_cd — sama persis
+  // pola ControlStockModel di DB EDP (fginvc.fgloc): rackcode cuma nempel
+  // sebagai SLOT (rackcode1..4) di baris lokasi, jadi buat tau rackcode X
+  // ada di lot mana, WAJIB dicari lewat 4 kolom slot itu, BUKAN dicari di
+  // tabel rack_cd (rack_cd emang gak punya kolom lokasi sama sekali — ini
+  // akar masalah kenapa loccode sering "-").
+  // Balikin Map<rackcode, loccol>.
+  static async _getLoccolByRackcodes(rackcodes) {
+    const map = new Map();
+    const kodeRak = [...new Set((rackcodes || []).filter(Boolean))];
+    if (!kodeRak.length) return map;
+
+    try {
+      const [rows] = await poolCrossDocking.query(
+        `SELECT loccol, rackcode1, rackcode2, rackcode3, rackcode4
+         FROM fginvc_cd.fgloc_cd
+         WHERE rackcode1 IN (?) OR rackcode2 IN (?)
+            OR rackcode3 IN (?) OR rackcode4 IN (?)`,
+        [kodeRak, kodeRak, kodeRak, kodeRak],
+      );
+      rows.forEach((r) => {
+        const loccol = (r.loccol || "").toString().trim();
+        if (!loccol) return;
+        [r.rackcode1, r.rackcode2, r.rackcode3, r.rackcode4].forEach((rc) => {
+          const rackcode = (rc || "").toString().trim();
+          if (rackcode && kodeRak.includes(rackcode) && !map.has(rackcode)) {
+            map.set(rackcode, loccol);
+          }
+        });
+      });
+    } catch (err) {
+      console.error(
+        "KarawangFifoModel._getLoccolByRackcodes: query fginvc_cd.fgloc_cd gagal:",
+        err,
+      );
+    }
+    return map;
+  }
+
   // Cari 1 barcode spesifik di Cross Docking DC Karawang — dipakai tombol
   // "Search Barcode" di Control FIFO buat operator yang megang 1 barcode
   // fisik (mis. abis discan) dan mau tau: barang ini ada di rak/lot mana,
@@ -205,15 +244,19 @@ class KarawangFifoModel {
   // ketemu 1 baris (tapi tetep ditangani sebagai array, jaga-jaga kalau
   // suatu saat ada duplikat data di sumbernya).
   //
-  // 3 tingkat, dari tercepat ke paling berat:
+  // 4 tingkat, dari tercepat ke paling berat:
   //   1) LANGSUNG KE DB (poolCrossDocking, fginvc_cd.rack_cd) — gak ada
   //      login/HTTP round-trip kayak lewat REST API, jadi jauh lebih
   //      responsif. Ini jalur utama; kalau tabelnya beneran punya kolom
   //      collie sendiri, bahkan gak perlu nyentuh REST API sama sekali.
-  //   2) REST API filter `barcode` — fallback kalau query DB di atas
+  //   2) LOT/loccode-nya diisi dari DB juga: join rackcode hasil jalur 1
+  //      ke fginvc_cd.fgloc_cd (lihat _getLoccolByRackcodes) — bukan lagi
+  //      nembak REST API buat ini, jauh lebih cepat & gak gantung
+  //      koneksi ke API Cross Docking.
+  //   3) REST API filter `barcode` — fallback kalau query DB di atas
   //      error (mis. jaringan ke DB lagi bermasalah) atau kolomnya
   //      ternyata beda dari dugaan (0 hasil).
-  //   3) REST API tarik SEMUA data lalu disaring sendiri — fallback
+  //   4) REST API tarik SEMUA data lalu disaring sendiri — fallback
   //      terakhir, KETAHUAN dari pengetesan manual parameter `barcode`
   //      di /stock-cd/detail-all gak selalu beneran difilter di server
   //      sumbernya. Ini query BERAT, sengaja paling akhir.
@@ -258,7 +301,10 @@ class KarawangFifoModel {
     // loccode gak keisi bener buat hasil pencarian barcode ini.
     if (!rows.length) {
       rows = matchExact(
-        await CrossDockingClient.fetchDetailAll({ barcode: kode, detail: true }),
+        await CrossDockingClient.fetchDetailAll({
+          barcode: kode,
+          detail: true,
+        }),
       );
     }
 
@@ -314,9 +360,7 @@ class KarawangFifoModel {
     const results = await Promise.all(
       enrichedRows.map(async (row) => {
         const item = (getField(row, "item") || "").toString().trim();
-        const probcodeRaw = (getField(row, "probcode") || "")
-          .toString()
-          .trim();
+        const probcodeRaw = (getField(row, "probcode") || "").toString().trim();
         return {
           barcode: (getField(row, "barcode") || "").toString().trim(),
           item,
@@ -331,13 +375,28 @@ class KarawangFifoModel {
       }),
     );
 
-    // Backfill loccode kalau ada yang masih "-" — biasanya kejadian pas
-    // hasilnya dari jalur 1 (DB langsung, `SELECT *` dari fginvc_cd.rack_cd)
-    // yang ternyata gak punya kolom loccode/sejenisnya sama sekali (beda
-    // dari tabel/endpoint lain yang udah kekonfirmasi ada). Cuma 1 barcode
-    // yang dicari di sini, jadi aman nembak REST API sekali lagi (dengan
-    // detail:true) buat ngambil loccode-nya doang.
-    const missingLoccode = results.filter((r) => r.loccode === "-");
+    // Backfill loccode kalau ada yang masih "-" — WAJIB kejadian pas
+    // hasilnya dari jalur 1 (DB langsung dari fginvc_cd.rack_cd), soalnya
+    // tabel itu emang gak punya kolom lokasi/lot sama sekali. Coba DB dulu
+    // (join ke fginvc_cd.fgloc_cd lewat rackcode, sama pola ControlStockModel
+    // di EDP) — jauh lebih cepat & gak gantung REST API. REST API cuma jadi
+    // fallback paling akhir kalau DB gagal/rackcode-nya ternyata belum
+    // ke-assign ke lokasi manapun.
+    let missingLoccode = results.filter((r) => r.loccode === "-");
+    if (missingLoccode.length) {
+      const loccolMap = await KarawangFifoModel._getLoccolByRackcodes(
+        missingLoccode.map((r) => r.rackcode).filter((rc) => rc && rc !== "-"),
+      );
+      missingLoccode.forEach((r) => {
+        const loccol = loccolMap.get(r.rackcode);
+        if (loccol) r.loccode = loccol;
+      });
+      missingLoccode = missingLoccode.filter((r) => r.loccode === "-");
+    }
+
+    // Fallback terakhir: REST API (dengan detail:true) — cuma dipanggil
+    // kalau setelah dicoba lewat DB di atas masih ada yang belum ketemu
+    // lot-nya.
     if (missingLoccode.length) {
       try {
         const detailRows = await CrossDockingClient.fetchDetailAll({
