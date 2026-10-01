@@ -21,6 +21,11 @@ import KarawangCrossDocking from "./pages/stok-opname-karawang/CrossDockingPage"
 import KarawangFifo from "./pages/stok-opname-karawang/FifoPage";
 import KarawangTransferPlan from "./pages/stok-opname-karawang/TransferPlanPage";
 import BarcodeTracer from "./pages/barcode/BarcodeTracerPage";
+import TubeHome from "./pages/tube-barcode/TubeBarcodeHome";
+import TubeScan from "./pages/tube-barcode/ScanCollie";
+import TubeReceive from "./pages/tube-barcode/Receive";
+import TubeTransfer from "./pages/tube-barcode/Transfer";
+import TubeMonitoring from "./pages/tube-barcode/Monitoring";
 import "./App.css";
 
 const currentUser = { name: "Admin GT" };
@@ -54,6 +59,11 @@ function LayoutRoutes() {
           element={<KarawangTransferPlan />}
         />
         <Route path="/barcode" element={<BarcodeTracer />} />
+        <Route path="/tube-barcode" element={<TubeHome />} />
+        <Route path="/tube-barcode/scan" element={<TubeScan />} />
+        <Route path="/tube-barcode/receive" element={<TubeReceive />} />
+        <Route path="/tube-barcode/transfer" element={<TubeTransfer />} />
+        <Route path="/tube-barcode/monitoring" element={<TubeMonitoring />} />
       </Routes>
     </AppLayout>
   );

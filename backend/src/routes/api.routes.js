@@ -28,6 +28,9 @@ router.use(
 // ── Barcode Tracer ──
 router.use("/barcode-tracer", require("./barcode/barcode-tracer.routes"));
 
+// ── Barcode Tube ──
+router.use("/tube-barcode", require("./tube-barcode/tube-barcode.routes"));
+
 // ── Shared ──
 router.use("/system", require("./shared/system.routes"));
 

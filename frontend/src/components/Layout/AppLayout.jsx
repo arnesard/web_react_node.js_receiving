@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 // Halaman yang TIDAK menampilkan navbar menu (Dashboard/Input/Laporan)
-const HIDE_NAV_ON = ["/overtime", "/employees", "/transfer", "/karawang", "/control-stock", "/barcode"];
+const HIDE_NAV_ON = ["/overtime", "/employees", "/transfer", "/karawang", "/control-stock", "/barcode", "/tube-barcode"];
 
 const NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard", icon: <LayoutDashboard size={16} /> },
@@ -33,7 +33,8 @@ export default function AppLayout({ children, user }) {
     location.pathname.startsWith("/transfer") ||
     location.pathname.startsWith("/karawang") ||
     location.pathname.startsWith("/control-stock") ||
-    location.pathname.startsWith("/barcode");
+    location.pathname.startsWith("/barcode") ||
+    location.pathname.startsWith("/tube-barcode");
 
   return (
     <>
@@ -193,6 +194,8 @@ export default function AppLayout({ children, user }) {
           padding: 1.75rem 1.5rem;
           min-height: calc(100vh - var(--header-height));
         }
+
+        ${location.pathname.startsWith("/tube-barcode") ? "#main-content { padding: 0 !important; }" : ""}
 
         /* ── RESPONSIVE ── */
         @media (max-width: 992px) {

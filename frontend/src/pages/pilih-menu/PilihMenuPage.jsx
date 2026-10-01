@@ -65,6 +65,13 @@ const menuItems = [
     desc: "Tracking barcode & history",
     tag: "TRACE",
   },
+  {
+    to: "/tube-barcode",
+    icon: Barcode,
+    label: "Barcode Tube",
+    desc: "Scan collie, receive, transfer & monitoring tube",
+    tag: "TUBE",
+  },
 ];
 
 export default function PilihMenu() {
